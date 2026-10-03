@@ -25,3 +25,16 @@ server = "localhost:8088"
 [matrix.storage]
 backend = "fs"
 root = "./data/media"
+
+# Optional same-process Pasion. Prepare assets first:
+# python3 scripts/prepare-pasion.py
+# Existing installations can omit this section and keep their current login.
+[pasion]
+database_url = "postgres://hagency:hagency_dev@127.0.0.1:55438/pasion"
+resources_dir = "resources/pasion"
+# Enable only after preparing Pasion accounts; native passwords are not migrated.
+delegate_matrix_auth = false
+# Native Pasion config can be supplied under pasion.settings, for example:
+# [pasion.settings.account]
+# password_registration_enabled = true
+# password_registration_contact_required = false

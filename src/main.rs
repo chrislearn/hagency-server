@@ -11,7 +11,7 @@ use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 #[derive(Parser)]
 #[command(
     version,
-    about = "Matrix and Hagency administration in one Rust server"
+    about = "Matrix, OIDC and Hagency administration in one Rust server"
 )]
 struct Args {
     #[arg(short, long, default_value = "config.toml")]
@@ -42,12 +42,30 @@ async fn run() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_filter(filter))
         .with(palpo::logging::capture_layer())
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(opentelemetry::global::tracer("hagency-server")),
+        )
         .init();
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("Rustls crypto provider was already initialized"))?;
     conf.prepare_signing_key()?;
+    let pasion_config = hagency_server::pasion::prepare(&mut conf).await?;
+    let pasion = match pasion_config {
+        Some(figment) => {
+            Some(hagency_server::PasionServer::initialize(&figment, Default::default()).await?)
+        }
+        None => None,
+    };
     let matrix = MatrixServer::initialize(conf.matrix.clone())
         .await
         .map_err(anyhow::Error::msg)?;
     if let Some(localpart) = &args.bootstrap_admin {
+        anyhow::ensure!(
+            !conf.pasion.as_ref().is_some_and(|p| p.delegate_matrix_auth),
+            "native bootstrap cannot be used with delegated auth; prepare a Pasion account instead"
+        );
         let user = palpo::core::OwnedUserId::try_from(format!(
             "@{localpart}:{}",
             conf.matrix.server_name
@@ -73,10 +91,18 @@ async fn run() -> anyhow::Result<()> {
         .account_config
         .as_ref()
         .map(|_| admin.start_account_worker());
-    let router = admin
+    let mut router = admin
         .router()
         .push(matrix.router())
         .push(Router::with_path("healthz").get(health));
+    if let Some(pasion) = &pasion {
+        router = Router::new()
+            .push(pasion.router(
+                &conf.pasion.as_ref().unwrap().resources()?,
+                Some(hagency_server::pasion::MOUNT),
+            ))
+            .push(router);
+    }
     let service = matrix.service(router);
     let acceptor = TcpListener::new(conf.listen).try_bind().await?;
     let server = Server::new(acceptor);
@@ -99,6 +125,11 @@ async fn run() -> anyhow::Result<()> {
     if let Some(worker) = worker {
         worker.abort();
         let _ = worker.await;
+    }
+    if let Some(pasion) = pasion {
+        tokio::time::timeout(Duration::from_secs(15), pasion.shutdown())
+            .await
+            .map_err(|_| anyhow::anyhow!("Pasion workers did not stop within 15 seconds"))?;
     }
     Ok(())
 }

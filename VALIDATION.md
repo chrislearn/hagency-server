@@ -50,7 +50,7 @@ Image size reported by Docker: 359,121,160 bytes.
 The contract fixture is intentionally controlled; it proves HTTP behavior and
 state transitions, not interaction with a live Codex/Claude model runtime. The
 real integration proves actual Palpo event delivery and restart recovery. It does
-not exercise Matrix federation, every Matrix API, OAuth, or the complete optional
+not exercise Matrix federation, every Matrix API, or the complete optional
 account flow against a real approval bot. No existing development stack or user
 database was stopped, reconfigured or migrated. Test containers/volumes are
 isolated and removed after verification.
@@ -70,3 +70,60 @@ exposed two stale documentation imports; these are corrected in a documentation
 follow-up on the Palpo PR (`cargo test -p palpo --doc --locked`: 2 passed).
 The server remains pinned to the runtime revision
 used in all native and Docker integration tests, rather than an untested update.
+
+## Embedded Pasion (2026-10-04)
+
+Pasion is pinned to `b8333e1ee60c6362847d0f1890461b7af7547037`
+([PR #102](https://github.com/meldry-com/pasion/pull/102)). It uses the same
+Tokio/Salvo process and listener at `/_pasion/`, with its own database on the
+shared PostgreSQL service. No existing development deployment was changed.
+
+Executed checks:
+
+- Pasion mounted-state isolation, SPA prefix, API schema base paths and legacy
+  account redirects; loopback homeserver proxy bypass; template prefix tests.
+- Standalone Pasion CLI/backend compilation and CI-pinned formatter.
+- Dioxus 0.7.5 release WASM assets built with `--base-path /_pasion/`.
+- Browser login and Security Center navigation; prefixed JS/WASM/CSS, no browser
+  errors.
+- Host configuration regression rejects matching database names even through
+  differently spelled hosts, before writing keys or creating data directories.
+- Original web-admin ten-group HTTP contract and actual Palpo/Fleet integration
+  still pass with Pasion dependencies linked.
+
+- Final pinned revision: `cargo build --locked` and `cargo test --all-targets
+  --locked` passed (one atomic-state test and three configuration tests; one
+  opt-in database test remains ignored in this invocation).
+- Final native integration passed: same listener, prefixed discovery, SPA, JS,
+  WASM and API schema; legacy account redirect; registration/browser login;
+  background Palpo provisioning; delegated Matrix password login/introspection;
+  identical signing/encryption keys across restart and graceful shutdown.
+
+- Final host `cargo fmt --check` and strict all-target Clippy passed.
+
+- Final Linux arm64 Docker build passed within the 8 GB VM budget. Backend
+  release build took 8m50s with warmed dependency caches; Dioxus release assets
+  also built inside their separate build stage.
+- `HAGENCY_TEST_IMAGE=hagency-server:pasion-integration-check node
+  tests/docker-smoke.mjs` passed: unchanged homepage, actual administrator login,
+  same-port Matrix/Pasion discovery and account UI, UID 10001, mode-0600 runtime
+  config and OAuth keys, graceful restart, retained administrator, unchanged
+  Matrix signing key and OAuth JWKS. The harness removed its containers/volumes.
+
+Pasion-integrated image manifest:
+`sha256:a542c5c46cc2774fa3dedad5e1c382ac79ec6fefaebafc2cdbe787e8a4849496`.
+Docker-reported size: 439,346,725 bytes. Native test PostgreSQL containers and
+their temporary data were also removed.
+
+The authentication integration verifies actual account registration, background
+Palpo provisioning, delegated Matrix password login and token introspection.
+It does not prove every OIDC authorization-code/PKCE or external-provider flow.
+Delegated Matrix authentication is opt-in; existing Palpo passwords are not
+automatically migrated into Pasion.
+
+The upstream PR also includes a test-only discovery-cache isolation follow-up.
+Coverage runs independent AppStates in one process and previously reused the
+first issuer. The complete backend suite after that fix passed with an isolated
+PostgreSQL database: 191 passed, 1 ignored. The host remains pinned to the
+production revision validated above; this test-only follow-up retains production
+caching behavior.

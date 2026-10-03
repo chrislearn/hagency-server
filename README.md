@@ -1,7 +1,7 @@
 # hagency-server
 
-Palpo Matrix homeserver and Palpo web-admin in **one Rust process and one HTTP
-listener**. The application uses Rust, Tokio, Salvo, Diesel/diesel-async and
+Palpo Matrix homeserver, Pasion authentication and Palpo web-admin in **one Rust
+process and one HTTP listener**. The application uses Rust, Tokio, Salvo, Diesel/diesel-async and
 PostgreSQL, matching Palpo's backend. No Node server runs in production.
 
 The existing HTML, JavaScript and CSS frontend is unchanged. It is embedded in
@@ -16,9 +16,12 @@ hagency-server (one process, one port)
 ├─ MatrixServer: Palpo initialization, Matrix/admin/discovery routes and workers
 ├─ Rust web-admin: sessions, Fleet/Agent, project requests, account approvals
 ├─ outbound relay: durable transactions, leases, ACKs and published snapshots
+├─ PasionServer: OAuth/OIDC, account UI/API and workers at /_pasion/
 └─ unchanged web-admin assets
            │
-           └─ PostgreSQL: Palpo tables + public.hagency_admin_state
+           └─ PostgreSQL service
+              ├─ hagency: Palpo + public.hagency_admin_state
+              └─ pasion: authentication tables
 ```
 
 Palpo is linked as a Rust library, not launched as a separate process or reached
@@ -36,11 +39,15 @@ binary does. Matrix background workers stop with the runtime.
 ## Development
 
 Requirements: Rust >=1.94, PostgreSQL client library (`libpq`), and Docker for
-the PostgreSQL service. Node is used only for the optional HTTP contract test.
+the PostgreSQL service. Embedded Pasion also needs the wasm32-unknown-unknown
+target and Dioxus 0.7.5 assets; the preparation script downloads the matching
+Dioxus CLI when necessary. Node is used during frontend build and HTTP tests.
 
 ```sh
 python3 scripts/init-config.py --dev
 docker compose up -d postgres
+rustup target add wasm32-unknown-unknown
+python3 scripts/prepare-pasion.py
 # On a new database, bootstrap an administrator as described below first.
 python3 scripts/dev.py
 ```
@@ -163,7 +170,7 @@ A database outage fails writes; restart the process to recover that connection.
 The current document store follows the original single-server/single-writer
 model, with bounded queue capacity. It is not a clustered scheduling system.
 
-This phase integrates Palpo and web-admin. Pasion/padmin and the project-first
+This phase integrates Palpo, Pasion and web-admin. padmin and the project-first
 Rinx client are subsequent work. The existing web-admin frontend still uses
 Matrix password login; OAuth UI has not been substituted. Existing SQLite admin
 databases are not automatically imported: use a fresh database for this version
@@ -209,3 +216,74 @@ The Docker smoke test creates a unique Compose project and removes its own
 containers/volumes afterward. See `VALIDATION.md` for executed checks and limits.
 
 Palpo embedding change: [upstream PR #505](https://github.com/palpo-im/palpo/pull/505).
+
+### Embedded Pasion
+
+Pasion now shares the Rust process and listener with Palpo and web-admin.
+The embedding API and subpath support are proposed upstream in
+[Pasion PR #102](https://github.com/meldry-com/pasion/pull/102):
+
+| Component | URL |
+| --- | --- |
+| Existing web-admin | `/` |
+| Matrix client/federation/admin APIs | Existing Matrix/Palpo paths |
+| Pasion account UI | `/_pasion/` and `/_pasion/login` |
+| OIDC discovery | `/_pasion/.well-known/openid-configuration` |
+| OIDC issuer | `<public_origin>/_pasion/` |
+| OAuth token / JWKS | `/_pasion/oauth2/token`, `/_pasion/oauth2/keys.json` |
+
+No separate Pasion daemon, public IP, Node server or reverse-proxy rewrite is
+needed. Pasion background tasks call Palpo's protected MAS APIs through the
+same listener's loopback address. The host creates/persists OAuth signing keys,
+cookie encryption key and the shared Matrix secret in mode-0600
+`data/pasion-secrets.json`. Keep this file together with the database backups.
+
+Pasion and Palpo use **different databases** on one PostgreSQL service. Compose
+creates `pasion` alongside `hagency` when initializing a new volume. For an
+existing Compose PostgreSQL volume, create the new database once before
+starting the updated server:
+
+```sh
+docker compose exec postgres psql -U hagency -d hagency -c 'CREATE DATABASE pasion OWNER hagency;'
+```
+
+Enable embedding by adding `[pasion]` to the single host TOML, with
+`database_url` and `resources_dir`. The generated development/deployment
+configs include this section. Native Pasion settings (email, SMS, account
+registration, clients, upstream OAuth providers, rate limits, branding) belong
+under `[pasion.settings]`; host-managed HTTP, database, Matrix, keys, templates
+and storage cannot be overridden there. Existing configurations without a
+`[pasion]` section remain valid.
+
+For native development, build Pasion's Dioxus WASM frontend/resources once:
+
+```sh
+python3 scripts/prepare-pasion.py
+python3 scripts/dev.py --pasion-source /path/to/pasion --palpo-source /path/to/palpo
+```
+
+`prepare-pasion.py` uses the pinned source by default; `--source` takes a local
+checkout. It requires Rust's `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
+The script reuses `dx` 0.7.5 or fetches a matching, checksum-verified CLI into
+`.run/tools/` without replacing a globally installed version.
+The development watcher rebuilds edited Pasion backend/frontend code and
+copies templates/translations/policies, then gracefully replaces the server.
+No image rebuild is involved. Docker builds and packages those resources as
+part of its image.
+
+Mounting Pasion and switching Matrix login are independent choices.
+`pasion.delegate_matrix_auth = false` preserves Palpo's existing native login.
+Set it to `true` **after preparing Pasion accounts** to advertise MSC3861 and
+delegate password login/token introspection to the mounted service. Host
+configuration derives the public issuer and internal endpoints automatically.
+Existing Palpo passwords are not copied into Pasion. Registration is disabled
+by default; configure an upstream provider or explicitly enable Pasion
+registration. This stage does not add legacy Matrix SSO redirects; use OIDC
+clients or the delegated password flow. Web-admin keeps its existing UI and
+uses the Matrix login endpoint, so delegated password login works there too.
+Legacy web-admin account-approval workflows require native auth and are
+rejected when combined with Pasion delegated registration.
+
+The combined distribution includes AGPL-3.0-only Pasion and uses that license.
+The original Apache-2.0 license/notices for Palpo-derived code are retained in
+`LICENSE.Apache-2.0` and `NOTICE`.

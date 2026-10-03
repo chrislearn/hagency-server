@@ -38,6 +38,7 @@ server = {json.dumps(a.server_name)}
 backend = "fs"
 root = "/app/data/media"
 '''
+    config += f'''\n[pasion]\ndatabase_url = "postgres://hagency:{password}@postgres:5432/pasion"\nresources_dir = "/app/resources/pasion"\ndelegate_matrix_auth = false\n'''
     fd = os.open(env, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     with os.fdopen(fd,'w') as file: file.write('HAGENCY_DB_PASSWORD=' + password + '\n')
 fd = os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

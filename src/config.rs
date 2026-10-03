@@ -26,6 +26,8 @@ pub struct Config {
     pub account_config: Option<PathBuf>,
     #[serde(default)]
     pub retirement_admin_token_file: Option<PathBuf>,
+    #[serde(default)]
+    pub pasion: Option<crate::pasion::PasionConfig>,
     pub matrix: palpo::config::ServerConfig,
 }
 #[derive(Clone, Deserialize)]
@@ -73,6 +75,9 @@ impl Config {
             && Path::new(root).is_relative()
         {
             *root = base.join(&*root).to_string_lossy().into_owned();
+        }
+        if let Some(pasion) = &mut conf.pasion {
+            pasion.resolve_paths(base);
         }
         conf.validate()?;
         Ok(conf)
@@ -155,6 +160,9 @@ impl Config {
             !self.matrix.admin.console_automatic,
             "embedded Palpo does not support an automatic interactive console"
         );
+        if let Some(pasion) = &self.pasion {
+            pasion.validate(self)?;
+        }
         self.matrix.check()?;
         Ok(())
     }

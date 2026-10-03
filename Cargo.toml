@@ -3,11 +3,20 @@ name = "hagency-server"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 
 [dependencies]
 # Palpo embedding API; pin until the upstream PR is merged.
 palpo = { git = "https://github.com/palpo-im/palpo.git", rev = "c8568d9844a6be0a3172d98d7c9810e3a1f7521c" }
+pasion-backend = { git = "https://github.com/meldry-com/pasion.git", rev = "b8333e1ee60c6362847d0f1890461b7af7547037", features = ["cedar"] }
+pasion-config = { git = "https://github.com/meldry-com/pasion.git", rev = "b8333e1ee60c6362847d0f1890461b7af7547037" }
+figment = "0.10"
+camino = "1"
+rand_chacha = "0.3"
+rand_core = "0.6"
+tracing-opentelemetry = { version = "0.33", default-features = false }
+opentelemetry = { version = "0.32", features = ["trace"] }
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
 salvo = { version = "1.0.0", features = ["serve-static", "test"] }
 tokio = { version = "1.52", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

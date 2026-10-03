@@ -10,6 +10,7 @@ services:
       - "127.0.0.1:55438:5432"
     volumes:
       - database:/var/lib/postgresql
+      - ./deploy/pasion-database.sql:/docker-entrypoint-initdb.d/20-pasion.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hagency -d hagency"]
       interval: 5s
@@ -26,7 +27,7 @@ services:
     volumes:
       - ./config.docker.toml:/app/config.toml:ro
       - server-data:/app/data
-    stop_grace_period: 20s
+    stop_grace_period: 40s
     restart: unless-stopped
 volumes:
   database:

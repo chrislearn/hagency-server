@@ -7,6 +7,9 @@ use salvo::prelude::*;
 use std::sync::Arc;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("Rustls crypto provider already initialized"))?;
     let conf = Config::load(std::env::args().nth(1).expect("config path"))?;
     let url = std::env::var("FIXTURE_ORIGIN")?;
     let admin = Admin::new(&conf, Arc::new(Store::memory()))
