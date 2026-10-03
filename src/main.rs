@@ -85,7 +85,7 @@ async fn run() -> anyhow::Result<()> {
         palpo::user::make_user_admin(&user).await?;
         tracing::info!(user=%user,"bootstrap administrator created");
     }
-    let store = Arc::new(Store::postgres(&conf.matrix.db.url).await?);
+    let store = Arc::new(Store::postgres(&conf.database_url).await?);
     let admin = Admin::new(&conf, store).await?;
     let worker = conf
         .account_config

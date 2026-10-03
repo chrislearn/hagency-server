@@ -10,7 +10,7 @@ services:
       - "127.0.0.1:55438:5432"
     volumes:
       - database:/var/lib/postgresql
-      - ./deploy/pasion-database.sql:/docker-entrypoint-initdb.d/20-pasion.sql:ro
+      - ./deploy/databases.sql:/docker-entrypoint-initdb.d/20-components.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hagency -d hagency"]
       interval: 5s

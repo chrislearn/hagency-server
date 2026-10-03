@@ -10,6 +10,8 @@ use url::Url;
 pub struct Config {
     pub listen: SocketAddr,
     pub public_origin: Url,
+    /// Hagency administration and relay state; independent of Palpo migrations.
+    pub database_url: String,
     #[serde(default)]
     pub public_dir: Option<PathBuf>,
     #[serde(default = "default_data_dir")]
@@ -160,6 +162,12 @@ impl Config {
             !self.matrix.admin.console_automatic,
             "embedded Palpo does not support an automatic interactive console"
         );
+        let admin_db = postgres_database(&self.database_url, "database_url")?;
+        let matrix_db = postgres_database(&self.matrix.db.url, "matrix.db.url")?;
+        anyhow::ensure!(
+            admin_db.path() != matrix_db.path(),
+            "Hagency and Palpo must use different database names"
+        );
         if let Some(pasion) = &self.pasion {
             pasion.validate(self)?;
         }
@@ -180,6 +188,15 @@ impl Config {
         };
         Url::parse(&format!("http://{ip}:{}/", self.listen.port())).unwrap()
     }
+}
+pub(crate) fn postgres_database(value: &str, field: &str) -> anyhow::Result<Url> {
+    let url = Url::parse(value).map_err(|e| anyhow::anyhow!("invalid {field}: {e}"))?;
+    anyhow::ensure!(
+        ["postgres", "postgresql"].contains(&url.scheme())
+            && !url.path().trim_start_matches('/').is_empty(),
+        "{field} requires a PostgreSQL URL with an explicit database name"
+    );
+    Ok(url)
 }
 pub fn origin(url: &Url, public: bool) -> anyhow::Result<()> {
     anyhow::ensure!(

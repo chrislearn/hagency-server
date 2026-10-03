@@ -61,7 +61,7 @@ const reservation = createServer().listen(0, '127.0.0.1'); await once(reservatio
 await new Promise(r => reservation.close(r));
 const base = `http://127.0.0.1:${port}`, dir = await mkdtemp(join(tmpdir(), 'hagency-contract-'));
 await writeFile(join(dir, 'accounts.json'), JSON.stringify(accountConfig));
-await writeFile(join(dir, 'config.toml'), `listen = "127.0.0.1:${port}"\npublic_origin = "${base}"\ncallback_origins = ["${fixtureOrigin}"]\naccount_config = "accounts.json"\n[matrix]\nserver_name = "example.test"\n[matrix.db]\nurl = "postgres://unused"\n[matrix.well_known]\nclient = "${base}"\nserver = "example.test"\n`);
+await writeFile(join(dir, 'config.toml'), `listen = "127.0.0.1:${port}"\npublic_origin = "${base}"\ndatabase_url = "postgres://unused/hagency"\ncallback_origins = ["${fixtureOrigin}"]\naccount_config = "accounts.json"\n[matrix]\nserver_name = "example.test"\n[matrix.db]\nurl = "postgres://unused/palpo"\n[matrix.well_known]\nclient = "${base}"\nserver = "example.test"\n`);
 const binary = process.env.CONTRACT_SERVER ?? resolve('target/debug/examples/admin_contract_server');
 const child = spawn(binary, [join(dir, 'config.toml')], { env: { ...process.env, FIXTURE_ORIGIN: fixtureOrigin }, stdio: ['ignore', 'pipe', 'pipe'] });
 let stderr = ''; child.stderr.on('data', b => stderr += b);

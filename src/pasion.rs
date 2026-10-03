@@ -36,17 +36,13 @@ impl PasionConfig {
         }
     }
     pub fn validate(&self, host: &Config) -> anyhow::Result<()> {
-        let auth_db = url::Url::parse(&self.database_url).context("invalid pasion.database_url")?;
-        let matrix_db = url::Url::parse(&host.matrix.db.url).context("invalid matrix.db.url")?;
+        let auth_db = crate::config::postgres_database(&self.database_url, "pasion.database_url")?;
+        let matrix_db = crate::config::postgres_database(&host.matrix.db.url, "matrix.db.url")?;
+        let admin_db = crate::config::postgres_database(&host.database_url, "database_url")?;
+        // Different hostname spellings may still refer to the same server.
         anyhow::ensure!(
-            ["postgres", "postgresql"].contains(&auth_db.scheme()),
-            "Pasion requires PostgreSQL"
-        );
-        // Even differently-spelled hostnames may refer to the same server. Keep
-        // database names different, including when credentials differ.
-        anyhow::ensure!(
-            auth_db.path() != matrix_db.path(),
-            "Pasion and Palpo must use different database names"
+            auth_db.path() != matrix_db.path() && auth_db.path() != admin_db.path(),
+            "Hagency, Palpo and Pasion must use different database names"
         );
         let settings = self
             .settings

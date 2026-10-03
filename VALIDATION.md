@@ -127,3 +127,39 @@ first issuer. The complete backend suite after that fix passed with an isolated
 PostgreSQL database: 191 passed, 1 ignored. The host remains pinned to the
 production revision validated above; this test-only follow-up retains production
 caching behavior.
+
+## Three independent databases (2026-10-04)
+
+The earlier sections record the two-database baseline. The current configuration
+requires an independent top-level `database_url` for Hagency and uses
+`matrix.db.url` for Palpo and `pasion.database_url` for Pasion. Defaults are
+`hagency`, `palpo`, `pasion` on one PostgreSQL service. Fresh Compose volumes
+create all three; existing volumes/configurations require the documented split
+procedure and are not altered by this change.
+
+Executed checks:
+
+- Locked native binary/example compilation, all-target tests, formatter and
+  strict all-target Clippy passed. Pairwise database collisions (including
+  different host spellings), missing Hagency URL, and invalid PostgreSQL URLs
+  are rejected before initialization.
+- Generated development and Compose configuration validated with the actual
+  binary: three connection URLs and mode 0600, in isolated temporary directories.
+- Ten-group unchanged HTTP contract passed.
+- Actual Palpo/Fleet integration passed on separate Hagency and Palpo databases:
+  the admin DB contains only `hagency_admin_state`; the Matrix DB contains its
+  homeserver tables and no admin table. Actual event delivery/ACK/proof and
+  retained users/Fleet/transport state after restart passed.
+- Actual Pasion integration passed on three independent databases: registration,
+  background Palpo provisioning, delegated Matrix login/introspection, prefixed
+  frontend/API/discovery, stable keys and graceful restart/shutdown.
+- Linux arm64 Docker image built and isolated Compose smoke test passed: three
+  table sets in their respective databases, non-root UID, mode-0600 config/keys,
+  unchanged homepage, native admin login, Matrix/Pasion endpoints, retained
+  account and stable signing keys after restart.
+
+Image manifest:
+`sha256:78915ebed3329376292f5c5a7b16095bf364a66243aacfa3bca8a9932575b7bc`.
+Docker-reported size: 439,336,859 bytes. All database/integration deployments use
+isolated containers and temporary configurations; existing development stacks
+and private configuration files were not changed.

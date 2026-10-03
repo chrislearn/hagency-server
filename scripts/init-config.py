@@ -25,11 +25,12 @@ else:
     config = f'''listen = "0.0.0.0:8088"
 public_origin = {json.dumps(a.origin)}
 data_dir = "/app/data"
+database_url = "postgres://hagency:{password}@postgres:5432/hagency"
 [matrix]
 server_name = {json.dumps(a.server_name)}
 allow_registration = false
 [matrix.db]
-url = "postgres://hagency:{password}@postgres:5432/hagency"
+url = "postgres://hagency:{password}@postgres:5432/palpo"
 pool_size = 10
 [matrix.well_known]
 client = {json.dumps(a.origin)}

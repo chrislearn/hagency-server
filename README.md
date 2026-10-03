@@ -20,7 +20,8 @@ hagency-server (one process, one port)
 └─ unchanged web-admin assets
            │
            └─ PostgreSQL service
-              ├─ hagency: Palpo + public.hagency_admin_state
+              ├─ hagency: management state + durable outbound queue
+              ├─ palpo: Matrix homeserver tables
               └─ pasion: authentication tables
 ```
 
@@ -74,7 +75,20 @@ normal dependency with `cargo update -p palpo` after removing the override.
 ## Configuration and initial administrator
 
 One TOML file contains host settings and a `[matrix]` section with Palpo's
-ServerConfig. `--check-config` validates it without starting a server. Embedded
+ServerConfig. The full deployment uses three databases on one PostgreSQL service:
+
+| Configuration | Database | Contents |
+| --- | --- | --- |
+| Top-level `database_url` | `hagency` | web-admin/Fleet/project state and outbound queue |
+| `matrix.db.url` | `palpo` | Matrix users, rooms, events and homeserver state |
+| `pasion.database_url` | `pasion` | Accounts, OAuth/OIDC tokens and sessions |
+
+The top-level `database_url` is required; the admin store never falls back to
+Palpo's connection. Database names must be distinct even when differently
+spelled hostnames refer to the same PostgreSQL server. Omitting `[pasion]` leaves
+the two independent Hagency and Palpo databases.
+
+`--check-config` validates the configuration without starting a server. Embedded
 Palpo ignores its `listeners` field; `listen` controls the single host listener.
 Relative asset/config/data/media paths are resolved against the config file.
 Without an explicit `[matrix.keypair]`, a signing key is generated once and
@@ -123,7 +137,7 @@ compiler job and a lower optimization level for the large Palpo crate to reduce
 peak memory; its crypto/HTTP/database dependencies retain full optimization.
 Put the loopback-exposed
 HTTP listener behind your HTTPS proxy. Preserve the public Host header and
-forward `/`, `/api`, `/_matrix`, `/_palpo`, `/.well-known/matrix` and `/healthz`
+forward `/`, `/api`, `/_matrix`, `/_palpo`, `/_pasion/`, `/.well-known/matrix` and `/healthz`
 to port 8088. Browser/admin/outbound clients use the configured public origin;
 Palpo's App Service relay uses the derived internal origin. No separate
 web-admin origin, port or relay URL needs configuration.
@@ -199,14 +213,15 @@ explicit dedicated `HAGENCY_TEST_DATABASE_URL`:
 HAGENCY_TEST_DATABASE_URL=postgres://... cargo test --lib postgres_restart -- --ignored
 ```
 
-`tests/integration.mjs` verifies the real integrated binary against a dedicated
-PostgreSQL database, including administrator login, Matrix discovery, Fleet
-registration, real relay delivery, restart recovery and persistent signing keys.
-The integration script refuses a database containing any application tables.
-To run it, install `psql`, create a new empty dedicated database, then:
+`tests/integration.mjs` verifies the real integrated binary against dedicated
+Hagency and Palpo PostgreSQL databases, including administrator login, Matrix
+discovery, Fleet registration, real relay delivery, restart recovery and persistent signing keys.
+The integration script refuses either database if it contains application tables.
+To run it, install `psql`, create two empty dedicated databases, then:
 
 ```sh
-HAGENCY_TEST_DATABASE_URL=postgres://... node tests/integration.mjs
+HAGENCY_TEST_DATABASE_URL=postgres://.../hagency \
+PALPO_TEST_DATABASE_URL=postgres://.../palpo node tests/integration.mjs
 # Build an image and verify an isolated deployment, including restart:
 docker build -t hagency-server:integration-check .
 node tests/docker-smoke.mjs
@@ -238,14 +253,11 @@ same listener's loopback address. The host creates/persists OAuth signing keys,
 cookie encryption key and the shared Matrix secret in mode-0600
 `data/pasion-secrets.json`. Keep this file together with the database backups.
 
-Pasion and Palpo use **different databases** on one PostgreSQL service. Compose
-creates `pasion` alongside `hagency` when initializing a new volume. For an
-existing Compose PostgreSQL volume, create the new database once before
-starting the updated server:
-
-```sh
-docker compose exec postgres psql -U hagency -d hagency -c 'CREATE DATABASE pasion OWNER hagency;'
-```
+All three components use **separate databases** on one PostgreSQL service.
+Compose creates `hagency` through `POSTGRES_DB`; `deploy/databases.sql` creates
+`palpo` and `pasion` when initializing a fresh volume. PostgreSQL initialization
+scripts do not rerun for existing volumes. See the database split instructions
+below before upgrading an old combined Hagency/Palpo database.
 
 Enable embedding by adding `[pasion]` to the single host TOML, with
 `database_url` and `resources_dir`. The generated development/deployment
@@ -253,7 +265,8 @@ configs include this section. Native Pasion settings (email, SMS, account
 registration, clients, upstream OAuth providers, rate limits, branding) belong
 under `[pasion.settings]`; host-managed HTTP, database, Matrix, keys, templates
 and storage cannot be overridden there. Existing configurations without a
-`[pasion]` section remain valid.
+`[pasion]` section remain valid after adding the independent top-level
+`database_url`.
 
 For native development, build Pasion's Dioxus WASM frontend/resources once:
 
@@ -287,3 +300,43 @@ rejected when combined with Pasion delegated registration.
 The combined distribution includes AGPL-3.0-only Pasion and uses that license.
 The original Apache-2.0 license/notices for Palpo-derived code are retained in
 `LICENSE.Apache-2.0` and `NOTICE`.
+
+### Upgrading the former combined database
+
+This change does not automatically rename databases, move existing data or
+rewrite private configuration files. For a former deployment with Matrix and
+admin tables together in `hagency`, stop all server processes and back up that
+database and the persisted key/media directory first. The following commands
+assume the original Compose setup, no existing `palpo` database, and an existing
+`public.hagency_admin_state` table. Run them only after stopping any native
+server connected to those databases as well.
+
+```sh
+docker compose stop server
+umask 077
+mkdir -p backups/db-split
+docker compose exec -T postgres pg_dump -U hagency -Fc hagency > backups/db-split/hagency-before-split.dump
+docker compose exec -T postgres pg_dump -U hagency --no-owner --no-privileges -t public.hagency_admin_state hagency > backups/db-split/admin.sql
+# Stop here if either backup fails.
+docker compose exec -T postgres psql -U hagency -d postgres -v ON_ERROR_STOP=1 \
+  -c 'ALTER DATABASE hagency RENAME TO palpo;' \
+  -c 'CREATE DATABASE hagency OWNER hagency;'
+docker compose exec -T postgres psql -U hagency -d hagency --single-transaction -v ON_ERROR_STOP=1 < backups/db-split/admin.sql
+```
+
+Set the top-level `database_url` to `/hagency`, change `matrix.db.url` to
+`/palpo`, and keep `pasion.database_url` at `/pasion`. Keep the same Matrix server
+name and key/media directory. If Pasion was never enabled, create its database
+once before enabling it. The configuration generator intentionally refuses to
+overwrite existing files.
+
+After confirming the admin restore succeeded, remove its original table from
+`palpo` so it contains only Matrix data:
+
+```sh
+docker compose exec -T postgres psql -U hagency -d palpo -v ON_ERROR_STOP=1 -c 'DROP TABLE public.hagency_admin_state;'
+```
+
+The server can then be restarted with the updated configuration and image.
+Existing Matrix accounts and Fleet/queue state are retained by the rename and
+admin-table copy; existing Pasion data stays in its database.

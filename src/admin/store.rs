@@ -47,8 +47,7 @@ impl Store {
             lock.locked,
             "another hagency-server owns this admin database"
         );
-        // Do not create a schema matching the database role: PostgreSQL
-        // searches "$user" before public and would redirect Palpo migrations.
+        // Hagency owns its dedicated database and keeps all state in public.
         sql_query("CREATE TABLE IF NOT EXISTS public.hagency_admin_state (id INTEGER PRIMARY KEY CHECK (id=1), body JSONB NOT NULL)").execute(&mut db).await?;
         let row = sql_query("SELECT body FROM public.hagency_admin_state WHERE id=1")
             .load::<Document>(&mut db)

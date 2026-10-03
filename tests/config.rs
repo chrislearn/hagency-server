@@ -38,20 +38,45 @@ fn public_http_and_mistyped_host_configuration_are_rejected() {
 }
 
 #[test]
-fn shared_matrix_and_pasion_database_is_rejected_before_migrations() {
+fn databases_are_distinct_and_required_before_initialization() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     let original = include_str!("../config.example.toml");
-    // Different hostname spelling and scheme must not hide shared migrations.
-    let shared = original.replace(
-        "postgres://hagency:hagency_dev@127.0.0.1:55438/pasion",
-        "postgresql://hagency:hagency_dev@localhost:55438/hagency",
+    let conf = toml::from_str::<Config>(original).unwrap();
+    assert!(conf.database_url.ends_with("/hagency"));
+    assert!(conf.matrix.db.url.ends_with("/palpo"));
+    assert!(
+        conf.pasion
+            .as_ref()
+            .unwrap()
+            .database_url
+            .ends_with("/pasion")
     );
-    std::fs::write(&path, shared).unwrap();
-    let error = match Config::load(&path) {
-        Ok(_) => panic!("shared databases were accepted"),
-        Err(error) => error,
-    };
-    assert!(error.to_string().contains("different database names"));
-    assert!(!dir.path().join("data").exists());
+    for (from, to) in [
+        ("palpo", "hagency"),
+        ("pasion", "palpo"),
+        ("pasion", "hagency"),
+    ] {
+        let shared = original.replace(
+            &format!("postgres://hagency:hagency_dev@127.0.0.1:55438/{from}"),
+            &format!("postgresql://hagency:hagency_dev@localhost:55438/{to}"),
+        );
+        std::fs::write(&path, shared).unwrap();
+        let error = match Config::load(&path) {
+            Ok(_) => panic!("shared databases were accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("different database names"));
+        assert!(!dir.path().join("data").exists());
+    }
+    let missing = original.replace(
+        "database_url = \"postgres://hagency:hagency_dev@127.0.0.1:55438/hagency\"",
+        "",
+    );
+    assert!(toml::from_str::<Config>(&missing).is_err());
+    for url in ["sqlite://admin.db", "postgres://localhost"] {
+        let invalid = original.replace(&conf.database_url, url);
+        std::fs::write(&path, invalid).unwrap();
+        assert!(Config::load(&path).is_err());
+    }
 }
