@@ -1,0 +1,42 @@
+[package]
+name = "hagency-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+
+[dependencies]
+# Palpo embedding API; pin until the upstream PR is merged.
+palpo = { git = "https://github.com/palpo-im/palpo.git", rev = "c8568d9844a6be0a3172d98d7c9810e3a1f7521c" }
+salvo = { version = "1.0.0", features = ["serve-static", "test"] }
+tokio = { version = "1.52", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["serde"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.13", features = ["json"] }
+diesel = { version = "2.3", features = ["postgres", "serde_json"] }
+diesel-async = { version = "0.9", features = ["postgres"] }
+chrono = { version = "0.4", features = ["serde"] }
+url = { version = "2", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+rand = "0.10"
+sha2 = "0.11"
+base64 = "0.23"
+regex = "1"
+subtle = "2"
+aes-gcm = "0.10"
+hex = "0.4"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Palpo is a large crate. Keep release builds within ordinary Docker VM memory;
+# cryptography, database and HTTP dependencies retain full optimization.
+[profile.release.package.palpo]
+opt-level = 1
+codegen-units = 256

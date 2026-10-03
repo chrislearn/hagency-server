@@ -1,0 +1,33 @@
+name: hagency-server
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: hagency
+      POSTGRES_DB: hagency
+      POSTGRES_PASSWORD: ${HAGENCY_DB_PASSWORD:-hagency_dev}
+    ports:
+      - "127.0.0.1:55438:5432"
+    volumes:
+      - database:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hagency -d hagency"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  server:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - ./config.docker.toml:/app/config.toml:ro
+      - server-data:/app/data
+    stop_grace_period: 20s
+    restart: unless-stopped
+volumes:
+  database:
+  server-data:

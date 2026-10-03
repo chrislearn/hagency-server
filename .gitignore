@@ -1,0 +1,9 @@
+/target/
+/data/
+/config.toml
+/config.dev.toml
+/config.docker.toml
+/.run/
+.env
+
+__pycache__/

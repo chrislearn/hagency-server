@@ -1,0 +1,27 @@
+# One process and one HTTP listener. Matrix identity must remain stable.
+listen = "127.0.0.1:8088"
+public_origin = "http://127.0.0.1:8088"
+# Development only: read existing frontend files on each request.
+# public_dir = "public"
+# callback_origins = ["http://127.0.0.1:3010"]
+# Optional existing web-admin account-approval JSON config (same fields).
+# account_config = "secrets/account-approval.json"
+# retirement_admin_token_file = "secrets/agent-admin-token"
+
+[matrix]
+server_name = "localhost:8088"
+allow_registration = false
+# All Palpo ServerConfig options can be set under matrix. Its listeners are
+# unused when embedded: hagency-server owns the listener above.
+
+[matrix.db]
+url = "postgres://hagency:hagency_dev@127.0.0.1:55438/hagency"
+pool_size = 10
+
+[matrix.well_known]
+client = "http://127.0.0.1:8088"
+server = "localhost:8088"
+
+[matrix.storage]
+backend = "fs"
+root = "./data/media"

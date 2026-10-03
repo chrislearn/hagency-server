@@ -1,0 +1,9 @@
+.git
+target
+data
+.run
+.env
+config.toml
+config.dev.toml
+config.docker.toml
+secrets
