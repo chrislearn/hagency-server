@@ -58,3 +58,15 @@ isolated and removed after verification.
 The adapter retains the original single-writer model. Browser sessions are
 memory-only. Existing SQLite admin state is not automatically migrated. Palpo's
 embedding API remains process-global, with one MatrixServer per runtime/process.
+
+## Upstream CI baseline
+
+Palpo's current main revision already fails its strict workspace Clippy job with
+17 redundant-field diagnostics from existing Diesel-derived data structs:
+[main workflow](https://github.com/palpo-im/palpo/actions/runs/37019841267).
+PR #505 has the same diagnostics, outside this change. This is separate from the
+passed downstream all-target Clippy check above. The library extraction also
+exposed two stale documentation imports; these are corrected in a documentation
+follow-up on the Palpo PR (`cargo test -p palpo --doc --locked`: 2 passed).
+The server remains pinned to the runtime revision
+used in all native and Docker integration tests, rather than an untested update.
