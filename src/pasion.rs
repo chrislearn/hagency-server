@@ -10,33 +10,54 @@ use std::path::{Path, PathBuf};
 
 pub const MOUNT: &str = "/_pasion/";
 
-#[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct PasionConfig {
     pub database_url: String,
-    #[serde(default = "default_resources")]
     pub resources_dir: PathBuf,
-    #[serde(default)]
     pub delegate_matrix_auth: bool,
-    /// Native Pasion settings: email, upstream_oauth2, clients, account, etc.
-    /// HTTP/database/Matrix/secrets/storage paths are managed by the host.
-    #[serde(default = "empty_settings")]
     pub settings: Value,
 }
-fn default_resources() -> PathBuf {
-    "resources/pasion".into()
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmbeddingConfig {
+    #[serde(default = "default_resources")]
+    resources_dir: PathBuf,
+    #[serde(default)]
+    delegate_matrix_auth: bool,
 }
-fn empty_settings() -> Value {
-    json!({})
+fn default_resources() -> PathBuf {
+    "../../resources/pasion".into()
 }
 impl PasionConfig {
-    pub fn resolve_paths(&mut self, base: &Path) {
-        if self.resources_dir.is_relative() {
-            self.resources_dir = base.join(&self.resources_dir);
-        }
+    pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path
+            .as_ref()
+            .canonicalize()
+            .context("cannot open pasion_config")?;
+        let base = path.parent().unwrap();
+        let mut settings: Value = toml::from_str(&std::fs::read_to_string(&path)?)
+            .context("invalid Pasion TOML configuration")?;
+        let embedding = settings
+            .as_object_mut()
+            .context("Pasion configuration must be a table")?
+            .remove("hagency")
+            .unwrap_or_else(|| json!({}));
+        let embedding: EmbeddingConfig = serde_json::from_value(embedding)
+            .context("invalid Pasion [hagency] embedding options")?;
+        let database_url = settings["database"]["uri"]
+            .as_str()
+            .context("Pasion configuration requires [database].uri")?
+            .to_owned();
+        crate::config::resolve_file_references(&mut settings, base);
+        Ok(Self {
+            database_url,
+            resources_dir: crate::config::resolve(base, &embedding.resources_dir),
+            delegate_matrix_auth: embedding.delegate_matrix_auth,
+            settings,
+        })
     }
     pub fn validate(&self, host: &Config) -> anyhow::Result<()> {
-        let auth_db = crate::config::postgres_database(&self.database_url, "pasion.database_url")?;
+        let auth_db = crate::config::postgres_database(&self.database_url, "Pasion database.uri")?;
         let matrix_db = crate::config::postgres_database(&host.matrix.db.url, "matrix.db.url")?;
         let admin_db = crate::config::postgres_database(&host.database_url, "database_url")?;
         // Different hostname spellings may still refer to the same server.
@@ -47,18 +68,11 @@ impl PasionConfig {
         let settings = self
             .settings
             .as_object()
-            .context("pasion.settings must be a table")?;
-        for key in [
-            "http",
-            "database",
-            "matrix",
-            "secrets",
-            "templates",
-            "storage",
-        ] {
+            .context("Pasion configuration must be a table")?;
+        for key in ["http", "matrix", "secrets", "templates", "storage"] {
             anyhow::ensure!(
                 !settings.contains_key(key),
-                "pasion.settings.{key} is managed by hagency-server"
+                "Pasion {key} is managed by hagency-server"
             );
         }
         anyhow::ensure!(
@@ -149,10 +163,10 @@ pub async fn prepare(host: &mut Config) -> anyhow::Result<Option<Figment>> {
     }
     let root = conf.resources_dir;
     let mut settings = conf.settings;
-    // Overrides cannot change listener, issuer, DB, homeserver, or key ownership.
+    // The host owns the listener, issuer, homeserver and key lifecycle.
+    // Native database pool/TLS options stay in Pasion's own file.
     for (k,v) in json!({
         "http": {"public_base":public,"issuer":public,"listeners":[{"binds":[{"address":host.listen.to_string()}],"resources":[{"name":"assets","path":root.join("public")}]}],"trusted_proxies":[]},
-        "database":{"uri":conf.database_url},
         "matrix":{"kind":"palpo","homeserver":host.matrix.server_name,"endpoint":host.internal_origin(),"secret":secret},
         "secrets":saved["secrets"],
         "templates":{"path":root.join("templates"),"translations_path":root.join("translations")},

@@ -1,0 +1,12 @@
+# Native Pasion sections; email/account/clients/upstream_oauth2 belong here.
+[database]
+uri = "postgres://hagency:hagency_dev@127.0.0.1:55438/pasion"
+# max_connections = 10
+# Additional embedding options; networking/keys/Matrix links are derived.
+[hagency]
+resources_dir = "../../resources/pasion"
+# Enable only after preparing Pasion accounts; passwords are not migrated.
+delegate_matrix_auth = false
+# [account]
+# password_registration_enabled = true
+# password_registration_contact_required = false

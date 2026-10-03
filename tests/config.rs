@@ -1,9 +1,21 @@
 use hagency_server::config::Config;
+use std::path::{Path, PathBuf};
+
+const HOST: &str = include_str!("../config/examples/hagency.toml");
+const PALPO: &str = include_str!("../config/examples/palpo.toml");
+const PASION: &str = include_str!("../config/examples/pasion.toml");
+fn fixture(root: &Path) -> PathBuf {
+    let dir = root.join("config/dev");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("hagency.toml"), HOST).unwrap();
+    std::fs::write(dir.join("palpo.toml"), PALPO).unwrap();
+    std::fs::write(dir.join("pasion.toml"), PASION).unwrap();
+    dir.join("hagency.toml")
+}
 #[test]
-fn unified_config_and_signing_key_survive_restart() {
+fn component_config_and_signing_key_survive_restart() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path, include_str!("../config.example.toml")).unwrap();
+    let path = fixture(dir.path());
     let mut conf = Config::load(&path).unwrap();
     conf.prepare_signing_key().unwrap();
     let key = conf.matrix.keypair.clone().unwrap();
@@ -22,27 +34,24 @@ fn unified_config_and_signing_key_survive_restart() {
 #[test]
 fn public_http_and_mistyped_host_configuration_are_rejected() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let original = include_str!("../config.example.toml");
-    std::fs::write(
-        &path,
-        original.replace(
+    let path = fixture(dir.path());
+    for text in [
+        HOST.replace(
             "public_origin = \"http://127.0.0.1:8088\"",
             "public_origin = \"http://public.invalid\"",
         ),
-    )
-    .unwrap();
-    assert!(Config::load(&path).is_err());
-    std::fs::write(&path, format!("lissten = \"127.0.0.1:8088\"\n{original}")).unwrap();
-    assert!(Config::load(&path).is_err());
+        format!("lissten = \"127.0.0.1:8088\"\n{HOST}"),
+        format!("{HOST}\n[matrix]\nserver_name = \"old-inline.invalid\""),
+    ] {
+        std::fs::write(&path, text).unwrap();
+        assert!(Config::load(&path).is_err());
+    }
 }
-
 #[test]
 fn databases_are_distinct_and_required_before_initialization() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let original = include_str!("../config.example.toml");
-    let conf = toml::from_str::<Config>(original).unwrap();
+    let path = fixture(dir.path());
+    let conf = Config::load(&path).unwrap();
     assert!(conf.database_url.ends_with("/hagency"));
     assert!(conf.matrix.db.url.ends_with("/palpo"));
     assert!(
@@ -52,31 +61,95 @@ fn databases_are_distinct_and_required_before_initialization() {
             .database_url
             .ends_with("/pasion")
     );
-    for (from, to) in [
-        ("palpo", "hagency"),
-        ("pasion", "palpo"),
-        ("pasion", "hagency"),
+    for (component, original, from, to) in [
+        ("palpo", PALPO, "palpo", "hagency"),
+        ("pasion", PASION, "pasion", "palpo"),
+        ("pasion", PASION, "pasion", "hagency"),
     ] {
+        fixture(dir.path());
         let shared = original.replace(
             &format!("postgres://hagency:hagency_dev@127.0.0.1:55438/{from}"),
             &format!("postgresql://hagency:hagency_dev@localhost:55438/{to}"),
         );
-        std::fs::write(&path, shared).unwrap();
-        let error = match Config::load(&path) {
-            Ok(_) => panic!("shared databases were accepted"),
-            Err(error) => error,
-        };
+        std::fs::write(
+            path.parent().unwrap().join(format!("{component}.toml")),
+            shared,
+        )
+        .unwrap();
+        let error = Config::load(&path)
+            .err()
+            .expect("shared databases were accepted");
         assert!(error.to_string().contains("different database names"));
         assert!(!dir.path().join("data").exists());
     }
-    let missing = original.replace(
+    fixture(dir.path());
+    let missing = HOST.replace(
         "database_url = \"postgres://hagency:hagency_dev@127.0.0.1:55438/hagency\"",
         "",
     );
-    assert!(toml::from_str::<Config>(&missing).is_err());
+    std::fs::write(&path, missing).unwrap();
+    assert!(Config::load(&path).is_err());
     for url in ["sqlite://admin.db", "postgres://localhost"] {
-        let invalid = original.replace(&conf.database_url, url);
-        std::fs::write(&path, invalid).unwrap();
+        std::fs::write(&path, HOST.replace(&conf.database_url, url)).unwrap();
         assert!(Config::load(&path).is_err());
     }
+}
+#[test]
+fn component_paths_belong_to_each_file_and_are_listed_for_watchers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let host_dir = root.join("host");
+    let palpo_dir = root.join("components/palpo");
+    let pasion_dir = root.join("components/pasion");
+    for d in [&host_dir, &palpo_dir, &pasion_dir] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let path = host_dir.join("hagency.toml");
+    std::fs::write(
+        &path,
+        HOST.replace("\"palpo.toml\"", "\"../components/palpo/palpo.toml\"")
+            .replace("\"pasion.toml\"", "\"../components/pasion/pasion.toml\"")
+            .replace("../../data", "data"),
+    )
+    .unwrap();
+    std::fs::write(
+        palpo_dir.join("palpo.toml"),
+        PALPO.replace("../../data/media", "media").replacen(
+            "allow_registration = false",
+            "allow_registration = false\nregistration_token_file = \"registration-token\"",
+            1,
+        ),
+    )
+    .unwrap();
+    std::fs::write(pasion_dir.join("pasion.toml"), PASION.replace("../../resources/pasion", "assets") + "\n[passwords]\nsecret_file = \"pepper\"\n[account]\npassword_registration_enabled = true\n").unwrap();
+    let conf = Config::load(&path).unwrap();
+    assert_eq!(conf.data_dir, host_dir.join("data"));
+    assert_eq!(
+        conf.matrix.registration_token_file.as_ref().unwrap(),
+        &palpo_dir.join("registration-token")
+    );
+    match &conf.matrix.storage {
+        palpo::config::StorageConfig::Fs { root } => {
+            assert_eq!(Path::new(root), palpo_dir.join("media"))
+        }
+        _ => panic!("unexpected media backend"),
+    }
+    let pasion = conf.pasion.as_ref().unwrap();
+    assert_eq!(pasion.resources_dir, pasion_dir.join("assets"));
+    assert_eq!(
+        pasion.settings["passwords"]["secret_file"],
+        pasion_dir.join("pepper").to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        pasion.settings["account"]["password_registration_enabled"],
+        true
+    );
+    let paths = Config::config_files(&path).unwrap();
+    assert_eq!(paths.len(), 3);
+    for file in paths {
+        assert!(file.is_file());
+    }
+    std::fs::remove_file(pasion_dir.join("pasion.toml")).unwrap();
+    assert!(Config::load(&path).is_err());
+    assert!(!host_dir.join("data").exists());
 }

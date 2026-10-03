@@ -4,7 +4,7 @@ import argparse, hashlib, json, os, pathlib, signal, subprocess, time
 
 root = pathlib.Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser()
-p.add_argument('--config', default='config.dev.toml')
+p.add_argument('--config', default='config/dev/hagency.toml')
 p.add_argument('--palpo-source', type=pathlib.Path, help='local Palpo checkout containing the embedding API')
 p.add_argument('--pasion-source', type=pathlib.Path, help='local Pasion checkout containing PasionServer')
 a = p.parse_args()
@@ -14,7 +14,8 @@ if not config.exists():
     raise SystemExit('Create a development config with: python3 scripts/init-config.py --dev')
 cargo = ['cargo']
 # Development assets are served from disk; editing them needs only a browser refresh.
-watch_roots = [root / 'src', root / 'Cargo.toml', config]
+watch_roots = [root / 'src', root / 'Cargo.toml', config, config.parent]
+component_watch = []
 patches = []
 if a.palpo_source:
     source = a.palpo_source.resolve()
@@ -39,7 +40,7 @@ binary = pathlib.Path(metadata['target_directory']) / 'debug/hagency-server'
 
 def snapshot():
     files = []
-    for base in watch_roots:
+    for base in watch_roots + component_watch:
         if base.is_file(): files.append(base)
         elif base.exists():
             files.extend(f for f in base.rglob('*') if f.is_file() and not any(part in {'target', '.git'} for part in f.parts) and f.suffix in {'.rs', '.toml', '.js', '.css', '.html', '.json', '.cedar', '.ftl'})
@@ -74,6 +75,9 @@ try:
             print('Building hagency-server…', flush=True)
             built = subprocess.run(cargo + ['build', '--bin', 'hagency-server'])
             if built.returncode == 0 and not stopping:
+                paths = subprocess.run([str(binary), '--config', str(config), '--list-config-files'], capture_output=True, text=True)
+                if paths.returncode == 0:
+                    component_watch = [pathlib.Path(path) for path in json.loads(paths.stdout)]
                 if a.pasion_source:
                     # Rebuild WASM and copy edited templates/assets without an image.
                     prepared = subprocess.run(['python3', 'scripts/prepare-pasion.py', '--source', str(a.pasion_source)])

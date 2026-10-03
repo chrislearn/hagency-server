@@ -74,24 +74,55 @@ normal dependency with `cargo update -p palpo` after removing the override.
 
 ## Configuration and initial administrator
 
-One TOML file contains host settings and a `[matrix]` section with Palpo's
-ServerConfig. The full deployment uses three databases on one PostgreSQL service:
+Configuration is split into files owned by each component:
 
-| Configuration | Database | Contents |
+```text
+config/
+├─ examples/       # tracked, native configuration templates
+│  ├─ hagency.toml
+│  ├─ palpo.toml
+│  └─ pasion.toml
+├─ dev/            # generated, ignored, mode 0600 files
+│  ├─ hagency.toml
+│  ├─ palpo.toml
+│  └─ pasion.toml
+└─ docker/         # generated, ignored, mode 0600 files
+   ├─ hagency.toml
+   ├─ palpo.toml
+   └─ pasion.toml
+```
+
+Start with `--config config/dev/hagency.toml` (the CLI default). Hagency owns the
+listener, admin connection and data directory, and references the other files:
+
+```toml
+palpo_config = "palpo.toml"
+pasion_config = "pasion.toml"
+```
+
+Palpo uses its native top-level ServerConfig, including `[db]`, `[storage]` and
+`[well_known]`; there is no `[matrix]` wrapper. Pasion uses its native sections,
+including `[database]`, `[account]`, `[email]`, `[[clients]]` and
+`[[upstream_oauth2.providers]]`; there is no `[pasion.settings]` wrapper. Its
+additional `[hagency]` section contains `resources_dir` and
+`delegate_matrix_auth` for embedding.
+
+| File and setting | Database | Contents |
 | --- | --- | --- |
-| Top-level `database_url` | `hagency` | web-admin/Fleet/project state and outbound queue |
-| `matrix.db.url` | `palpo` | Matrix users, rooms, events and homeserver state |
-| `pasion.database_url` | `pasion` | Accounts, OAuth/OIDC tokens and sessions |
+| `hagency.toml`: `database_url` | `hagency` | web-admin/Fleet/project state and outbound queue |
+| `palpo.toml`: `db.url` | `palpo` | Matrix users, rooms, events and homeserver state |
+| `pasion.toml`: `database.uri` | `pasion` | Accounts, OAuth/OIDC tokens and sessions |
 
-The top-level `database_url` is required; the admin store never falls back to
-Palpo's connection. Database names must be distinct even when differently
-spelled hostnames refer to the same PostgreSQL server. Omitting `[pasion]` leaves
-the two independent Hagency and Palpo databases.
+Database names must be distinct. Omit `pasion_config` to disable Pasion and use
+only the independent Hagency and Palpo databases. Paths resolve relative to the
+file that declares them, including component references, media and supported
+native secret-file references. The development watcher monitors all three files,
+including references outside the main configuration directory.
 
-`--check-config` validates the configuration without starting a server. Embedded
-Palpo ignores its `listeners` field; `listen` controls the single host listener.
-Relative asset/config/data/media paths are resolved against the config file.
-Without an explicit `[matrix.keypair]`, a signing key is generated once and
+`--check-config` loads/checks all referenced files without starting a server;
+`--list-config-files` prints their paths as JSON without connecting to databases.
+Hagency's listener replaces Palpo/Pasion listener configuration in embedded mode.
+Without an explicit `[keypair]` in `palpo.toml`, a signing key is generated once and
 persisted in `data_dir/matrix-signing-key.json` (mode 0600). Back up that directory
 and PostgreSQL together. `server_name` is an identity and must not be changed
 when reusing a database.
@@ -101,7 +132,7 @@ with a password file, then start the same application:
 
 ```sh
 # Put a strong password in a protected file named secrets/admin-password.
-cargo run -- --config config.dev.toml --bootstrap-admin admin \
+cargo run -- --config config/dev/hagency.toml --bootstrap-admin admin \
   --bootstrap-password-file secrets/admin-password
 ```
 
@@ -129,7 +160,10 @@ docker compose up -d postgres
 docker compose build server
 ```
 
-This creates a protected config and `.env` with a generated database password.
+This creates `config/docker/{hagency,palpo,pasion}.toml` and a protected `.env`
+with a generated database password. Development generation similarly creates
+`config/dev/`; `--output-dir` can select another directory. The generator refuses
+to overwrite an existing directory.
 The first command prepares configuration without starting anything; the next two
 prepare PostgreSQL and the image for administrator bootstrap below. Compose deploys
 PostgreSQL plus the single hagency-server process. The Docker build uses one
@@ -142,8 +176,10 @@ to port 8088. Browser/admin/outbound clients use the configured public origin;
 Palpo's App Service relay uses the derived internal origin. No separate
 web-admin origin, port or relay URL needs configuration.
 
-The entrypoint copies the mode-0600 mounted configuration into a private runtime
-directory before dropping to UID 10001. The Rust process runs without root.
+Compose mounts `config/docker/` at `/app/config/`. The entrypoint copies this
+configuration tree into `/run/hagency/config/` (directories mode 0700, files mode
+0600) before dropping to UID 10001. References between component files and
+secret files inside this tree stay relative. The Rust process runs without root.
 Generated production paths are absolute; use absolute paths for optional mounted
 account configuration and token files, readable by UID 10001.
 
@@ -152,7 +188,7 @@ For bootstrap in Compose, after PostgreSQL is healthy:
 ```sh
 docker compose run --rm --service-ports \
   -v "$PWD/secrets/admin-password:/app/bootstrap-password:ro" server \
-  --config /app/config.toml --bootstrap-admin admin \
+  --config /app/config/hagency.toml --bootstrap-admin admin \
   --bootstrap-password-file /run/hagency/bootstrap-password
 ```
 
@@ -259,14 +295,14 @@ Compose creates `hagency` through `POSTGRES_DB`; `deploy/databases.sql` creates
 scripts do not rerun for existing volumes. See the database split instructions
 below before upgrading an old combined Hagency/Palpo database.
 
-Enable embedding by adding `[pasion]` to the single host TOML, with
-`database_url` and `resources_dir`. The generated development/deployment
-configs include this section. Native Pasion settings (email, SMS, account
-registration, clients, upstream OAuth providers, rate limits, branding) belong
-under `[pasion.settings]`; host-managed HTTP, database, Matrix, keys, templates
-and storage cannot be overridden there. Existing configurations without a
-`[pasion]` section remain valid after adding the independent top-level
-`database_url`.
+Enable embedding by referencing `pasion.toml` through `pasion_config` in
+`hagency.toml`. Generated profiles include that reference. Configure the Pasion
+DB in `[database].uri` and assets in `[hagency].resources_dir` in its own file.
+Native email, SMS, account registration, clients, upstream OAuth providers, pool
+limits, rate limits and branding settings live directly in `pasion.toml`.
+Networking/issuer, Matrix connections, templates, storage and key ownership are
+still derived by Hagency; those sections cannot override the host wiring. Native
+database pool and TLS settings are retained. All three databases remain separate.
 
 For native development, build Pasion's Dioxus WASM frontend/resources once:
 
@@ -285,7 +321,7 @@ No image rebuild is involved. Docker builds and packages those resources as
 part of its image.
 
 Mounting Pasion and switching Matrix login are independent choices.
-`pasion.delegate_matrix_auth = false` preserves Palpo's existing native login.
+`[hagency].delegate_matrix_auth = false` in `pasion.toml` preserves Palpo's existing native login.
 Set it to `true` **after preparing Pasion accounts** to advertise MSC3861 and
 delegate password login/token introspection to the mounted service. Host
 configuration derives the public issuer and internal endpoints automatically.
@@ -324,8 +360,8 @@ docker compose exec -T postgres psql -U hagency -d postgres -v ON_ERROR_STOP=1 \
 docker compose exec -T postgres psql -U hagency -d hagency --single-transaction -v ON_ERROR_STOP=1 < backups/db-split/admin.sql
 ```
 
-Set the top-level `database_url` to `/hagency`, change `matrix.db.url` to
-`/palpo`, and keep `pasion.database_url` at `/pasion`. Keep the same Matrix server
+Set `hagency.toml` → `database_url` to `/hagency`, `palpo.toml` → `[db].url`
+to `/palpo`, and `pasion.toml` → `[database].uri` to `/pasion`. Keep the same Matrix server
 name and key/media directory. If Pasion was never enabled, create its database
 once before enabling it. The configuration generator intentionally refuses to
 overwrite existing files.
@@ -340,3 +376,22 @@ docker compose exec -T postgres psql -U hagency -d palpo -v ON_ERROR_STOP=1 -c '
 The server can then be restarted with the updated configuration and image.
 Existing Matrix accounts and Fleet/queue state are retained by the rename and
 admin-table copy; existing Pasion data stays in its database.
+
+### Moving the previous single configuration into component files
+
+For an existing three-database configuration, keep the database URLs, server
+identity, key/media paths and authentication settings unchanged while splitting:
+
+1. Put host settings into `hagency.toml`; replace its inline component sections
+   with `palpo_config` and optional `pasion_config` file references.
+2. Move `[matrix]` into `palpo.toml` at the top level; remove the `matrix.` prefix
+   from its subsection names, such as `[matrix.db]` → `[db]`.
+3. Move `[pasion].database_url` to `[database].uri` in `pasion.toml`. Move
+   `resources_dir`/`delegate_matrix_auth` into its `[hagency]` section and unwrap
+   `[pasion.settings.*]` into the corresponding native sections.
+4. Adjust relative paths to each new file location, or keep absolute paths;
+   check with `hagency-server --config <path>/hagency.toml --check-config`.
+
+The previous private `config.dev.toml`/`config.docker.toml` files are not rewritten
+or imported automatically. Preserve them during the move. If their databases
+are still combined, complete the database split above before using the new files.

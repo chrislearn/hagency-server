@@ -61,9 +61,10 @@ const reservation = createServer().listen(0, '127.0.0.1'); await once(reservatio
 await new Promise(r => reservation.close(r));
 const base = `http://127.0.0.1:${port}`, dir = await mkdtemp(join(tmpdir(), 'hagency-contract-'));
 await writeFile(join(dir, 'accounts.json'), JSON.stringify(accountConfig));
-await writeFile(join(dir, 'config.toml'), `listen = "127.0.0.1:${port}"\npublic_origin = "${base}"\ndatabase_url = "postgres://unused/hagency"\ncallback_origins = ["${fixtureOrigin}"]\naccount_config = "accounts.json"\n[matrix]\nserver_name = "example.test"\n[matrix.db]\nurl = "postgres://unused/palpo"\n[matrix.well_known]\nclient = "${base}"\nserver = "example.test"\n`);
+await writeFile(join(dir, 'hagency.toml'), `listen = "127.0.0.1:${port}"\npublic_origin = "${base}"\ndatabase_url = "postgres://unused/hagency"\npalpo_config = "palpo.toml"\ncallback_origins = ["${fixtureOrigin}"]\naccount_config = "accounts.json"\n`);
+await writeFile(join(dir, 'palpo.toml'), `server_name = "example.test"\n[db]\nurl = "postgres://unused/palpo"\n[well_known]\nclient = "${base}"\nserver = "example.test"\n`);
 const binary = process.env.CONTRACT_SERVER ?? resolve('target/debug/examples/admin_contract_server');
-const child = spawn(binary, [join(dir, 'config.toml')], { env: { ...process.env, FIXTURE_ORIGIN: fixtureOrigin }, stdio: ['ignore', 'pipe', 'pipe'] });
+const child = spawn(binary, [join(dir, 'hagency.toml')], { env: { ...process.env, FIXTURE_ORIGIN: fixtureOrigin }, stdio: ['ignore', 'pipe', 'pipe'] });
 let stderr = ''; child.stderr.on('data', b => stderr += b);
 const delay = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, timeout = 12000) { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const v = await fn(); if (v) return v; } catch (e) { last = e; } await delay(100); } throw last ?? new Error('Timed out'); }

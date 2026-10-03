@@ -14,10 +14,12 @@ use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
     about = "Matrix, OIDC and Hagency administration in one Rust server"
 )]
 struct Args {
-    #[arg(short, long, default_value = "config.toml")]
+    #[arg(short, long, default_value = "config/dev/hagency.toml")]
     config: PathBuf,
     #[arg(long)]
     check_config: bool,
+    #[arg(long)]
+    list_config_files: bool,
     #[arg(long, requires = "bootstrap_password_file")]
     bootstrap_admin: Option<String>,
     #[arg(long, requires = "bootstrap_admin")]
@@ -32,6 +34,13 @@ fn main() -> anyhow::Result<()> {
 }
 async fn run() -> anyhow::Result<()> {
     let args = Args::parse();
+    if args.list_config_files {
+        println!(
+            "{}",
+            serde_json::to_string(&Config::config_files(&args.config)?)?
+        );
+        return Ok(());
+    }
     let mut conf = Config::load(&args.config)?;
     if args.check_config {
         println!("Configuration is valid.");

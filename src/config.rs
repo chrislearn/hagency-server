@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::Deserialize;
 use std::{
     net::SocketAddr,
@@ -7,7 +8,7 @@ use url::Url;
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Config {
+pub struct HostConfig {
     pub listen: SocketAddr,
     pub public_origin: Url,
     /// Hagency administration and relay state; independent of Palpo migrations.
@@ -29,8 +30,26 @@ pub struct Config {
     #[serde(default)]
     pub retirement_admin_token_file: Option<PathBuf>,
     #[serde(default)]
-    pub pasion: Option<crate::pasion::PasionConfig>,
+    pub pasion_config: Option<PathBuf>,
+    pub palpo_config: PathBuf,
+}
+/// Fully loaded runtime configuration; files stay owned by their components.
+#[derive(Clone)]
+pub struct Config {
+    pub host: HostConfig,
     pub matrix: palpo::config::ServerConfig,
+    pub pasion: Option<crate::pasion::PasionConfig>,
+}
+impl std::ops::Deref for Config {
+    type Target = HostConfig;
+    fn deref(&self) -> &HostConfig {
+        &self.host
+    }
+}
+impl std::ops::DerefMut for Config {
+    fn deref_mut(&mut self) -> &mut HostConfig {
+        &mut self.host
+    }
 }
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -54,33 +73,58 @@ fn default_data_dir() -> PathBuf {
     PathBuf::from("data")
 }
 impl Config {
+    /// Paths are relative to the file that declares them, never the shell CWD.
+    pub fn config_files(path: impl AsRef<Path>) -> anyhow::Result<Vec<PathBuf>> {
+        let path = path.as_ref().canonicalize()?;
+        let host = read_host(&path)?;
+        let base = path.parent().unwrap();
+        let mut paths = vec![path.clone(), resolve(base, &host.palpo_config)];
+        if let Some(pasion) = host.pasion_config {
+            paths.push(resolve(base, &pasion));
+        }
+        Ok(paths)
+    }
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let canonical_path = path.as_ref().canonicalize()?;
-        let path = canonical_path.as_path();
-        let mut conf: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
-        let base = path.parent().unwrap_or(Path::new("."));
-        for file in [
-            &mut conf.public_dir,
-            &mut conf.account_config,
-            &mut conf.retirement_admin_token_file,
-        ] {
-            if let Some(p) = file
-                && p.is_relative()
-            {
-                *p = base.join(&*p);
-            }
-        }
-        if conf.data_dir.is_relative() {
-            conf.data_dir = base.join(&conf.data_dir);
-        }
-        if let palpo::config::StorageConfig::Fs { root } = &mut conf.matrix.storage
-            && Path::new(root).is_relative()
+        let path = path.as_ref().canonicalize()?;
+        let mut host = read_host(&path)?;
+        let base = path.parent().unwrap();
+        for p in [
+            &mut host.public_dir,
+            &mut host.account_config,
+            &mut host.retirement_admin_token_file,
+            &mut host.pasion_config,
+        ]
+        .into_iter()
+        .flatten()
         {
-            *root = base.join(&*root).to_string_lossy().into_owned();
+            *p = resolve(base, p);
         }
-        if let Some(pasion) = &mut conf.pasion {
-            pasion.resolve_paths(base);
+        host.data_dir = resolve(base, &host.data_dir);
+        host.palpo_config = resolve(base, &host.palpo_config)
+            .canonicalize()
+            .context("cannot open palpo_config")?;
+        let matrix_base = host.palpo_config.parent().unwrap();
+        let raw = std::fs::read_to_string(&host.palpo_config)?;
+        let mut settings: serde_json::Value =
+            toml::from_str(&raw).context("invalid Palpo TOML configuration")?;
+        resolve_file_references(&mut settings, matrix_base);
+        let mut matrix: palpo::config::ServerConfig =
+            serde_json::from_value(settings).context("invalid Palpo configuration")?;
+        if let palpo::config::StorageConfig::Fs { root } = &mut matrix.storage {
+            *root = resolve(matrix_base, Path::new(root))
+                .to_string_lossy()
+                .into_owned();
         }
+        let pasion = host
+            .pasion_config
+            .as_ref()
+            .map(crate::pasion::PasionConfig::load)
+            .transpose()?;
+        let conf = Self {
+            host,
+            matrix,
+            pasion,
+        };
         conf.validate()?;
         Ok(conf)
     }
@@ -187,6 +231,37 @@ impl Config {
             self.listen.ip().to_string()
         };
         Url::parse(&format!("http://{ip}:{}/", self.listen.port())).unwrap()
+    }
+}
+fn read_host(path: &Path) -> anyhow::Result<HostConfig> {
+    toml::from_str(&std::fs::read_to_string(path)?)
+        .context("invalid Hagency configuration; use palpo_config/pasion_config to reference component files")
+}
+pub(crate) fn resolve(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_owned()
+    } else {
+        base.join(path)
+    }
+}
+/// Native config secret-file references, including client_secret = { file = ... }.
+pub(crate) fn resolve_file_references(value: &mut serde_json::Value, base: &Path) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if (key == "file" || key.ends_with("_file")) && value.is_string() {
+                    *value = serde_json::json!(resolve(base, Path::new(value.as_str().unwrap())));
+                } else {
+                    resolve_file_references(value, base);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                resolve_file_references(item, base);
+            }
+        }
+        _ => (),
     }
 }
 pub(crate) fn postgres_database(value: &str, field: &str) -> anyhow::Result<Url> {

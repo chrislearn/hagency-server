@@ -11,12 +11,16 @@ assert.ok(admin && matrix && pasion, 'Set EMPTY HAGENCY_TEST_DATABASE_URL, PALPO
 for (const database of [admin,matrix,pasion]) assert.equal(execFileSync('psql',[database,'-Atc',"SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema')"],{encoding:'utf8'}).trim(),'0','Refuses a populated database');
 const reserve=createServer().listen(0,'127.0.0.1');await once(reserve,'listening');const port=reserve.address().port;await new Promise(r=>reserve.close(r));
 const dir=await mkdtemp(join(tmpdir(),'hagency-pasion-')),base=`http://127.0.0.1:${port}`;
-const config=join(dir,'config.toml'),binary=process.env.HAGENCY_BINARY??resolve('target/debug/hagency-server');
+const config=join(dir,'hagency.toml'),binary=process.env.HAGENCY_BINARY??resolve('target/debug/hagency-server');
 const resources=resolve(process.env.PASION_TEST_RESOURCES??'resources/pasion');
 let child, logs='',cookie='';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn){for(let i=0;i<180;i++){if(child?.exitCode!==null&&child?.exitCode!==undefined)throw Error(logs);try{if(await fn())return;}catch(e){if(i===179)throw e;}await pause(500);}throw Error('Timed out: '+logs);}
-async function configure(delegate=false){await writeFile(config,`listen = "127.0.0.1:${port}"\npublic_origin = "${base}"\ndata_dir = ${JSON.stringify(join(dir,"data"))}\ndatabase_url = ${JSON.stringify(admin)}\n[matrix]\nserver_name = "localhost:${port}"\nallow_registration = false\n[matrix.db]\nurl = ${JSON.stringify(matrix)}\npool_size = 10\n[matrix.well_known]\nclient = "${base}"\nserver = "localhost:${port}"\n[matrix.storage]\nbackend = "fs"\nroot = "data/media"\n[pasion]\ndatabase_url = ${JSON.stringify(pasion)}\nresources_dir = ${JSON.stringify(resources)}\ndelegate_matrix_auth = ${delegate}\n[pasion.settings.account]\npassword_registration_enabled = true\npassword_registration_contact_required = false\n`,{mode:0o600});}
+async function configure(delegate=false){
+ await writeFile(config,`listen = "127.0.0.1:${port}"\npublic_origin = "${base}"\ndata_dir = ${JSON.stringify(join(dir,"data"))}\ndatabase_url = ${JSON.stringify(admin)}\npalpo_config = "palpo.toml"\npasion_config = "pasion.toml"\n`,{mode:0o600});
+ await writeFile(join(dir,'palpo.toml'),`server_name = "localhost:${port}"\nallow_registration = false\n[db]\nurl = ${JSON.stringify(matrix)}\npool_size = 10\n[well_known]\nclient = "${base}"\nserver = "localhost:${port}"\n[storage]\nbackend = "fs"\nroot = "data/media"\n`,{mode:0o600});
+ await writeFile(join(dir,'pasion.toml'),`[database]\nuri = ${JSON.stringify(pasion)}\nmax_connections = 6\n[hagency]\nresources_dir = ${JSON.stringify(resources)}\ndelegate_matrix_auth = ${delegate}\n[account]\npassword_registration_enabled = true\npassword_registration_contact_required = false\n`,{mode:0o600});
+}
 async function start(){child=spawn(binary,['--config',config],{stdio:['ignore','pipe','pipe'],env:{...process.env,RUST_LOG:'warn'}});child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b);await until(async()=> (await fetch(base+'/_pasion/healthz')).status===200);}
 async function stop(){if(child&&child.exitCode===null){const done=once(child,'exit');child.kill('SIGTERM');const result=await Promise.race([done,pause(35000).then(()=>{throw Error('Shutdown timed out')})]);assert.equal(result[0],0,logs);}child=undefined;}
 async function api(path,body){const r=await fetch(base+'/_pasion/api/v1'+path,{method:body?'POST':'GET',headers:{'content-type':'application/json',...(cookie?{cookie}:{})},body:body?JSON.stringify(body):undefined});const set=r.headers.getSetCookie();if(set.length)cookie=set.map(s=>s.split(';')[0]).join('; ');const data=await r.json();assert.equal(r.status,200,JSON.stringify(data));return data;}
@@ -47,6 +51,6 @@ try{
  const matrixLogin=await fetch(base+'/_matrix/client/v3/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:'m.login.password',identifier:{type:'m.id.user',user:'prefixuser'},password})});const token=await matrixLogin.json();assert.equal(matrixLogin.status,200,JSON.stringify(token));assert.ok(token.access_token);
  const me=await fetch(base+'/_matrix/client/v3/account/whoami',{headers:{authorization:'Bearer '+token.access_token}});assert.equal(me.status,200,await me.clone().text());assert.equal((await me.json()).user_id,`@prefixuser:localhost:${port}`);
  await stop();
- console.log('PASS Pasion: three isolated databases, same listener, prefixed discovery/SPA/JS/WASM/API, browser registration/login, delegated Matrix password/token introspection, stable keys on restart, graceful shutdown');
+ console.log('PASS Pasion: three component config files and isolated databases, same listener, prefixed discovery/SPA/JS/WASM/API, browser registration/login, delegated Matrix password/token introspection, stable keys on restart, graceful shutdown');
  if(process.env.HAGENCY_KEEP_TEST_CONFIG)await writeFile(process.env.HAGENCY_KEEP_TEST_CONFIG,await readFile(config),{mode:0o600});
 }catch(error){console.error(logs.slice(-10000));throw error;}finally{await stop();if(!process.env.HAGENCY_KEEP_TEST_CONFIG)await rm(dir,{recursive:true,force:true});}

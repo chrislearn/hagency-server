@@ -1,0 +1,13 @@
+# Hagency owns the process, listener, admin database and persisted runtime keys.
+listen = "127.0.0.1:8088"
+public_origin = "http://127.0.0.1:8088"
+database_url = "postgres://hagency:hagency_dev@127.0.0.1:55438/hagency"
+data_dir = "../../data"
+palpo_config = "palpo.toml"
+# Omit this reference to disable Pasion embedding.
+pasion_config = "pasion.toml"
+# Development only: read frontend files on each request.
+# public_dir = "../../public"
+# callback_origins = ["http://127.0.0.1:3010"]
+# account_config = "../../secrets/account-approval.json"
+# retirement_admin_token_file = "../../secrets/agent-admin-token"

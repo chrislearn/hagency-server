@@ -163,3 +163,45 @@ Image manifest:
 Docker-reported size: 439,336,859 bytes. All database/integration deployments use
 isolated containers and temporary configurations; existing development stacks
 and private configuration files were not changed.
+
+## Component-owned configuration files (2026-10-04)
+
+Current profiles are `config/dev/` and `config/docker/`, with separate
+`hagency.toml`, `palpo.toml` and `pasion.toml`. Templates live in
+`config/examples/`. Hagency references the two component files, Palpo keeps its
+native ServerConfig sections, and Pasion keeps native sections plus `[hagency]`
+embedding options. Database names and runtime ownership are unchanged.
+
+Executed checks:
+
+- Locked native binary/example compilation and all-target tests passed, including
+  four configuration regressions: persistent keys, schema/host checks, three DB
+  collision/missing URL checks, and paths resolved against independently located
+  component files (media, registration token and password secret files).
+- Strict all-target Clippy and formatter passed.
+- Development and production generator checked in isolated directories: three
+  valid files, mode 0600, directory mode 0700, explicit origin/Matrix identity,
+  native file references, and refusal to overwrite existing output.
+- `--list-config-files` returns all component references without database access;
+  the development watcher includes referenced files outside the main directory.
+- Ten-group HTTP contract passed with native Palpo configuration.
+- Actual Palpo/Fleet delivery/ACK/proof and restart integration passed using
+  separate host/Palpo config files and databases.
+- Actual Pasion registration, Palpo provisioning, delegated Matrix login/token
+  introspection, prefixed UI/API/discovery and stable keys across restart passed
+  using three config files; native Pasion database pool settings are retained.
+- New local development files were generated and checked without starting any
+  application or changing existing databases. The previous private root-level
+  configuration files were preserved.
+
+- Final Linux arm64 image built successfully. The isolated Compose smoke test
+  passed with the mounted component configuration directory: all three native
+  files loaded, runtime directory mode 0700 and all three files mode 0600 under
+  UID 10001, unchanged frontend, actual administrator login, Matrix/Pasion
+  endpoints, separate database table sets, graceful restart and identical
+  Matrix/OAuth signing keys. The test harness removed its containers/volumes.
+
+Image manifest:
+`sha256:c6efb58bc46828c5464a4a87b1442a3dd9014618b05f36c6e611508c17ad5ea7`.
+Docker-reported size: 439,287,638 bytes. Native test PostgreSQL was also removed;
+existing application stacks/databases were not restarted or migrated.

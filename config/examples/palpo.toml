@@ -1,0 +1,13 @@
+# Native Palpo ServerConfig: no [matrix] wrapper.
+server_name = "localhost:8088"
+allow_registration = false
+# Embedded mode uses Hagency's listener instead of Palpo's listeners.
+[db]
+url = "postgres://hagency:hagency_dev@127.0.0.1:55438/palpo"
+pool_size = 10
+[well_known]
+client = "http://127.0.0.1:8088"
+server = "localhost:8088"
+[storage]
+backend = "fs"
+root = "../../data/media"

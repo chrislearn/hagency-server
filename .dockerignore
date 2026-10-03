@@ -7,3 +7,7 @@ config.toml
 config.dev.toml
 config.docker.toml
 secrets
+
+config/dev
+config/docker
+backups

@@ -39,4 +39,4 @@ COPY --from=pasion-assets /pasion-resources /app/resources/pasion
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 EXPOSE 8088
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["--config", "/app/config.toml"]
+CMD ["--config", "/app/config/hagency.toml"]

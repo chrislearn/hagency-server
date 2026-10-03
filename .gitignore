@@ -10,3 +10,6 @@ __pycache__/
 
 /resources/pasion/
 /backups/
+
+/config/dev/
+/config/docker/

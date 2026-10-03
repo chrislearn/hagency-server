@@ -18,7 +18,9 @@ for (const url of [adminDatabase,database]) {
 const reserve=createServer().listen(0,'127.0.0.1');await once(reserve,'listening');const port=reserve.address().port;await new Promise(r=>reserve.close(r));
 const dir=await mkdtemp(join(tmpdir(),'hagency-live-')),base=`http://127.0.0.1:${port}`,serverName=`localhost:${port}`;
 const password=randomBytes(24).toString('base64url');const passwordFile=join(dir,'admin-password');await writeFile(passwordFile,password,{mode:0o600});
-const config=join(dir,'config.toml');await writeFile(config,`listen = "127.0.0.1:${port}"\npublic_origin = "${base}"\ndatabase_url = ${JSON.stringify(adminDatabase)}\n[matrix]\nserver_name = "${serverName}"\nallow_registration = false\n[matrix.db]\nurl = ${JSON.stringify(database)}\npool_size = 10\n[matrix.well_known]\nclient = "${base}"\nserver = "${serverName}"\n[matrix.storage]\nbackend = "fs"\nroot = "data/media"\n`,{mode:0o600});
+const config=join(dir,'hagency.toml');
+await writeFile(config,`listen = "127.0.0.1:${port}"\npublic_origin = "${base}"\ndatabase_url = ${JSON.stringify(adminDatabase)}\npalpo_config = "palpo.toml"\n`,{mode:0o600});
+await writeFile(join(dir,'palpo.toml'),`server_name = "${serverName}"\nallow_registration = false\n[db]\nurl = ${JSON.stringify(database)}\npool_size = 10\n[well_known]\nclient = "${base}"\nserver = "${serverName}"\n[storage]\nbackend = "fs"\nroot = "data/media"\n`,{mode:0o600});
 const binary=process.env.HAGENCY_BINARY??resolve('target/debug/hagency-server');let child,logs='';
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,timeout=45000){let error;const end=Date.now()+timeout;while(Date.now()<end){try{const v=await fn();if(v)return v;}catch(e){error=e;}if(child?.exitCode!==null)throw new Error('Server exited: '+logs.slice(-5000));await delay(100);}throw error??new Error('Timeout: '+logs.slice(-5000));}
