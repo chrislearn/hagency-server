@@ -73,7 +73,9 @@ Requirements: Rust >=1.99, [just](https://github.com/casey/just), PostgreSQL cli
 the PostgreSQL service. Embedded Pasion also needs the wasm32-unknown-unknown
 target and Dioxus 0.7.5 assets; resource preparation downloads the matching
 Dioxus CLI when necessary. Git and curl are used for fetching build tools/source.
-Node is used during frontend build and HTTP tests. Python is not required.
+Both frontends build with Rust and the Dioxus CLI, without Node.js or npm.
+Node.js is optional and used only to run the JavaScript HTTP/integration test
+scripts in `tests/`. Python is not required.
 `rust-toolchain.toml` pins Rust 1.99.0 with rustfmt, Clippy and the WASM target;
 Docker build stages use the matching Rust 1.99 images.
 
@@ -325,6 +327,9 @@ are not automatically imported: use a fresh database for this version until a
 separately validated migration is provided.
 
 ## Validation
+
+Install Node.js to run the `tests/*.mjs` scripts below. It is not required for
+frontend builds, local server development or deployment.
 
 ```sh
 just check-tools

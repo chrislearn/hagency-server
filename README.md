@@ -6,7 +6,7 @@ Palpo Matrix, Pasion authentication and Padmin/Hagency management in one Rust se
 
 ## Local development
 
-Install Rust ≥ 1.99, Node.js, [just](https://github.com/casey/just), Docker,
+Install Rust ≥ 1.99, [just](https://github.com/casey/just), Docker,
 Git, curl and `libpq`. The password example below also uses OpenSSL.
 Run these commands from the repository root on first setup:
 

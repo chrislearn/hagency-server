@@ -62,7 +62,8 @@ Matrix 后台任务随运行时停止。默认 Compose 的 HTTP 服务由前置 
 
 依赖 Rust ≥ 1.99、[just](https://github.com/casey/just)、PostgreSQL 客户端库 `libpq`，以及用于启动 PostgreSQL 的 Docker。
 Pasion 资源构建还需要 `wasm32-unknown-unknown` 目标和 Dioxus 0.7.5 资源；准备工具会在需要时下载匹配的 Dioxus CLI。
-Git 和 curl 用于获取工具或源码，Node 用于前端构建和 HTTP 测试，不需要 Python。
+Git 和 curl 用于获取工具或源码。两个前端都通过 Rust 和 Dioxus CLI 构建，不需要 Node.js 或 npm。
+只有执行 `tests/` 下 JavaScript HTTP/集成测试脚本时才需要可选的 Node.js，不需要 Python。
 `rust-toolchain.toml` 固定 Rust 1.99.0，并配置 rustfmt、Clippy 和 WASM 目标；Docker 构建阶段使用对应的 Rust 1.99 镜像。
 
 `just --list` 显示全部命令。Just 负责组织命令；独立的 Rust `xtask` 实现私有配置生成、资源准备和开发监听，运行这些工具不需要先编译服务器。
@@ -246,6 +247,8 @@ PostgreSQL 文档状态和投递队列原子提交。专用连接上的会话级
 旧 SQLite 管理数据不会自动导入；单独验证迁移方案前，这一版本应使用新的 PostgreSQL 管理数据库。
 
 ## 验证方法
+
+执行下面的 `tests/*.mjs` 脚本需要安装 Node.js；前端构建、本地服务器开发和部署不需要它。
 
 ```sh
 just check-tools

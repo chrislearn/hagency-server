@@ -380,3 +380,12 @@ Executed checks with Rust 1.99.0:
   the full Docker image was not rebuilt for this metadata/documentation change.
 - Existing local server health remained successful; databases and private
   configuration were not changed by this documentation/toolchain update.
+
+## Node.js dependency clarification (2026-10-04)
+
+Both `just prepare-frontend` and `just prepare-pasion` completed their real
+release/WASM bundling with Node.js/npm/npx commands disabled; no Node tool was
+invoked. README prerequisites and both detailed guides were corrected, and the
+unused `nodejs` installation was removed from the Docker web-tools stage.
+Node.js is needed only for `tests/*.mjs`, not for frontend builds or server
+runtime. The full Docker image was not rebuilt for this dependency removal.

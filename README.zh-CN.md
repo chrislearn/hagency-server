@@ -6,7 +6,7 @@
 
 ## 本地开发
 
-安装 Rust ≥ 1.99、Node.js、[just](https://github.com/casey/just)、Docker、Git、curl
+安装 Rust ≥ 1.99、[just](https://github.com/casey/just)、Docker、Git、curl
 和 `libpq`。下面的密码生成示例还需要 OpenSSL。
 首次配置时，在仓库根目录执行：
 

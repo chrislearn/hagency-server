@@ -194,3 +194,9 @@ Rust 1.99.0 下执行的检查：
 - Cargo metadata 确认 backend、frontend、xtask 都为 Apache-2.0、Rust 1.99。
 - 确认 Rust 1.99 bookworm/trixie Docker manifest 标签可用；本次元数据/文档修改未重新构建完整镜像。
 - 已有本地服务器健康检查仍正常；本次文档和工具链调整没有修改数据库或私有配置。
+
+## Node.js 依赖说明修正（2026-10-04）
+
+禁用 Node.js/npm/npx 命令后，`just prepare-frontend` 和 `just prepare-pasion` 均完成真实 release/WASM 打包，没有调用 Node 工具。
+已修正两版 README 的依赖清单及详细指南，删除 Docker web-tools 阶段中未使用的 `nodejs` 安装。
+Node.js 仅用于 `tests/*.mjs`，前端构建和服务器运行不需要它。本次删除依赖未重新构建完整 Docker 镜像。
