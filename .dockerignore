@@ -12,3 +12,6 @@ secrets
 config/dev
 config/docker
 backups
+
+resources/frontend
+resources/pasion

@@ -4,10 +4,23 @@ Palpo Matrix homeserver, Pasion authentication and Palpo web-admin in **one Rust
 process and one HTTP listener**. The application uses Rust, Tokio, Salvo, Diesel/diesel-async and
 PostgreSQL, matching Palpo's backend. No Node server runs in production.
 
-The existing HTML, JavaScript and CSS frontend is unchanged. It is embedded in
-the binary by default and served at `/`. Matrix endpoints remain at `/_matrix`,
-Palpo administration at `/_palpo`, discovery at `/.well-known/matrix`, and the
-web-admin backend at `/api`. `/healthz` reports process HTTP availability.
+The Cargo workspace follows Pasion's backend/frontend organization:
+
+```text
+crates/
+├─ backend/   # hagency-server: embedded Palpo, Pasion and Hagency APIs
+└─ frontend/  # hagency-frontend: Dioxus/WASM, based on copied Padmin source
+xtask/       # independent development/configuration tools
+resources/   # generated frontend and Pasion assets, ignored by Git
+```
+
+The frontend combines Padmin's Matrix administration screens with the previous
+web-admin workflows: projects, agent resource selection and requests, provider
+authorization and pairing, agent identities, account approvals and audit history.
+It is served at `/` by the Rust backend. Matrix endpoints remain at `/_matrix`,
+Palpo administration at `/_palpo`, discovery at `/.well-known/matrix`, and
+Hagency APIs at `/api`. Pasion remains mounted at `/_pasion/`.
+`/healthz` reports process HTTP availability.
 
 ## Architecture
 
@@ -17,7 +30,7 @@ hagency-server (one process, one port)
 ├─ Rust web-admin: sessions, Fleet/Agent, project requests, account approvals
 ├─ outbound relay: durable transactions, leases, ACKs and published snapshots
 ├─ PasionServer: OAuth/OIDC, account UI/API and workers at /_pasion/
-└─ unchanged web-admin assets
+└─ integrated Padmin + Hagency Dioxus/WASM assets
            │
            └─ PostgreSQL service
               ├─ hagency: management state + durable outbound queue
@@ -53,6 +66,7 @@ development watcher without compiling the server to run these tools.
 just init-dev
 just db-up
 just prepare-pasion
+just prepare-frontend
 # On a new database, bootstrap an administrator as described below first.
 just dev
 ```
@@ -60,9 +74,12 @@ just dev
 Open `http://127.0.0.1:8088`. This development config uses
 `localhost:8088` as the stable Matrix server name. Rust changes compile and then
 gracefully restart the process. A compilation failure keeps the last working
-server running. HTML/JS/CSS are read directly from `public/`; refreshing the
-browser sees edits immediately without rebuilding or restarting Rust. Tokens in browser sessions remain memory-only,
-so a server restart requires signing in again.
+server running. Frontend Rust/CSS changes rebuild the WASM assets, which the
+running host serves immediately; refresh the browser to load them. Frontend-only
+changes do not restart the backend. No Docker image rebuild is required.
+Browser access/refresh tokens remain in memory, so a full page reload requires
+signing in again. SPA navigation preserves the session. Host restarts can
+rebind the existing in-memory Matrix token to a new Hagency cookie session.
 
 For Palpo source development, use a local checkout with the MatrixServer API:
 
@@ -75,6 +92,40 @@ Palpo sources, and rebuilds against them. It does not modify the upstream
 checkout or require a rebuilt Docker image. Cargo may update its lockfile when
 switching between the pinned Git dependency and a local patch; return to the
 normal dependency with `cargo update -p palpo` after removing the override.
+
+The copied Padmin also contains optional `palpo_admin` sidecar screens for
+maintenance, scheduled commands and notifications. That separate sidecar is
+not embedded here; its menu stays disabled instead of sending requests to
+nonexistent Palpo endpoints. Matrix user/room/media/registration/App Service
+administration uses the mounted Palpo APIs directly.
+
+## Unified frontend authentication
+
+The host publishes nonsecret runtime settings at `/config.json`. With
+`[hagency].delegate_matrix_auth = false` in Pasion's config, the frontend signs
+in through Palpo's native Matrix password login. With delegation enabled, it
+uses Pasion OAuth Authorization Code + PKCE instead. Member login requests
+Matrix client/device scopes; the separate administrator login also requests
+Palpo/Pasion administrative scopes, which Pasion grants only to administrators.
+The host provisions the reserved public frontend OAuth client and derives its `/oauth/callback` URL;
+no client secret or separate frontend configuration is required.
+
+Both modes exchange the resulting Matrix token at `POST /api/login/token`.
+The backend validates `whoami` and the live Matrix administrator permission
+before issuing its HttpOnly cookie and CSRF token. Ordinary members see projects,
+Agent requests and their own Hagencys; Matrix administrators also see Padmin and
+Hagency administration. Pasion administration additionally requires a Pasion
+OAuth token, administrative scope and Pasion administrator permission, checked
+by Pasion's own endpoints. Pasion's administrator flag and Palpo's Matrix
+administrator flag remain separate: a full server administrator needs both;
+this frontend migration does not promote accounts automatically.
+In native authentication mode, the Pasion account center remains separately
+available at `/_pasion/`; its registration passwords are validated by Pasion and
+do not enable Palpo native password login. Account approval requests are offered
+only when configured.
+
+Frontend source provenance and AGPL licensing are recorded in `NOTICE` and
+`crates/frontend/LICENSE` (Padmin commit `83d4567470ada808b89914aa0c786cdc3a7ac89a`).
 
 ## Configuration and initial administrator
 
@@ -224,11 +275,10 @@ A database outage fails writes; restart the process to recover that connection.
 The current document store follows the original single-server/single-writer
 model, with bounded queue capacity. It is not a clustered scheduling system.
 
-This phase integrates Palpo, Pasion and web-admin. padmin and the project-first
-Rinx client are subsequent work. The existing web-admin frontend still uses
-Matrix password login; OAuth UI has not been substituted. Existing SQLite admin
-databases are not automatically imported: use a fresh database for this version
-until a separately validated migration is provided.
+This phase integrates Palpo, Pasion, Padmin and Hagency web administration.
+The project-first Rinx client is subsequent work. Existing SQLite admin databases
+are not automatically imported: use a fresh database for this version until a
+separately validated migration is provided.
 
 ## Validation
 
@@ -238,13 +288,15 @@ cargo fmt --check
 cargo check --all-targets --locked
 cargo test --locked
 cargo build --example admin_contract_server --locked
+CARGO_TARGET_DIR=.run/frontend-target cargo test --locked -p hagency-frontend
+just check-tools
 node tests/http-contract.mjs
 # If target artifacts are elsewhere:
 CONTRACT_SERVER=/absolute/path/to/admin_contract_server node tests/http-contract.mjs
 ```
 
 The HTTP contract harness starts the Rust adapter and a controlled Matrix
-fixture. It covers the unchanged assets, authentication and isolation,
+fixture. It covers the Dioxus SPA/assets and token bridge, authentication and isolation,
 Fleet/Agent lifecycle, project admission, outbound proof/ACK/rotation, exact
 request bindings, final allocation retirement and approved account provisioning.
 It does not connect to a model. PostgreSQL persistence/lock tests use an

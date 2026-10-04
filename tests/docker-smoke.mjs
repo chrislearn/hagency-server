@@ -13,7 +13,7 @@ const base=`http://127.0.0.1:${port}`,name=`localhost:${port}`,password=randomBy
 const dir=await mkdtemp(join(tmpdir(),'hagency-compose-')),compose=join(dir,'compose.yaml'),project='hagency-test-'+randomBytes(6).toString('hex');
 const run=(...args)=>execFileSync('docker',['compose','--project-name',project,'-f',compose,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']});
 const configDir=join(dir,'config');await mkdir(configDir,{mode:0o700});
-const hostConfig=`listen = "0.0.0.0:8088"\npublic_origin = "${base}"\ndata_dir = "/app/data"\ndatabase_url = "postgres://hagency:compose_test_only@postgres:5432/hagency"\npalpo_config = "palpo.toml"\npasion_config = "pasion.toml"\n`;
+const hostConfig=`listen = "0.0.0.0:8088"\npublic_origin = "${base}"\ndata_dir = "/app/data"\npublic_dir = "/app/resources/frontend/public"\ndatabase_url = "postgres://hagency:compose_test_only@postgres:5432/hagency"\npalpo_config = "palpo.toml"\npasion_config = "pasion.toml"\n`;
 const palpoConfig=`server_name = "${name}"\nallow_registration = false\n[db]\nurl = "postgres://hagency:compose_test_only@postgres:5432/palpo"\npool_size = 10\n[well_known]\nclient = "${base}"\nserver = "${name}"\n[storage]\nbackend = "fs"\nroot = "/app/data/media"\n`;
 const pasionConfig=`[database]\nuri = "postgres://hagency:compose_test_only@postgres:5432/pasion"\n[hagency]\nresources_dir = "/app/resources/pasion"\ndelegate_matrix_auth = false\n`;
 for(const [component,text] of [['hagency',hostConfig],['palpo',palpoConfig],['pasion',pasionConfig]]) await writeFile(join(configDir,component+'.toml'),text,{mode:0o600});
@@ -26,7 +26,11 @@ try{
  await writeFile(compose,definition(true));run('up','-d');await ready();await login();
  const tables=(db)=>run('exec','-T','postgres','psql','-U','hagency','-d',db,'-Atc',"SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='public' ORDER BY tablename").trim().split('\n');
  assert.deepEqual(tables('hagency'),['hagency_admin_state']);assert.ok(tables('palpo').includes('users'));assert.ok(!tables('palpo').includes('hagency_admin_state'));assert.ok(tables('pasion').length>1);assert.ok(!tables('pasion').includes('hagency_admin_state'));
- assert.equal(await(await fetch(base)).text(),await readFile(resolve('public/index.html'),'utf8'));
+ const frontend=await(await fetch(base)).text();assert.match(frontend,/<title>Hagency Server<\/title>/);
+ assert.equal(await(await fetch(base+'/hagency/projects')).text(),frontend);
+ const frontScript=frontend.match(/src="([^"]+\.js)"/)[1];const module=await(await fetch(new URL(frontScript,base))).text();
+ const frontWasm=module.match(/module_or_path:"([^"]+\.wasm)"/)[1];const wasmResponse=await fetch(new URL(frontWasm,base));assert.equal(wasmResponse.status,200);assert.match(wasmResponse.headers.get('content-type'),/application\/wasm/);assert.equal(Buffer.from(await wasmResponse.arrayBuffer()).subarray(0,4).toString('hex'),'0061736d');
+ const runtime=await(await fetch(base+'/config.json')).json();assert.equal(runtime.pasion_enabled,true);assert.equal(runtime.oauth_enabled,false);
  assert.equal((await fetch(base+'/_matrix/client/versions')).status,200);
  const discovery=await(await fetch(base+'/_pasion/.well-known/openid-configuration')).json();assert.equal(discovery.issuer,base+'/_pasion/');
  assert.equal((await fetch(base+'/_pasion/login')).status,200);

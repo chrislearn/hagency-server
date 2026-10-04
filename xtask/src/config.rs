@@ -119,12 +119,17 @@ fn render(root: &Path, options: &Options, password: &str) -> Result<Vec<(&'stati
                         "data_dir = \"../../data\"",
                         &format!("data_dir = {}", path("data", "/app/data")?),
                     );
-                    if options.dev {
-                        text = text.replace(
-                            "# public_dir = \"../../public\"",
-                            &format!("public_dir = {}", path("public", "/app/public")?),
-                        );
-                    } else {
+                    text = text.replace(
+                        "public_dir = \"../../resources/frontend/public\"",
+                        &format!(
+                            "public_dir = {}",
+                            path(
+                                "resources/frontend/public",
+                                "/app/resources/frontend/public"
+                            )?
+                        ),
+                    );
+                    if !options.dev {
                         text = text
                             .replace("listen = \"127.0.0.1:8088\"", "listen = \"0.0.0.0:8088\"");
                     }

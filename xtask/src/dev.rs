@@ -1,4 +1,4 @@
-use crate::{assets, command};
+use crate::{assets, command, frontend};
 use anyhow::{Context, Result, ensure};
 use clap::Args;
 use serde_json::Value;
@@ -33,7 +33,7 @@ pub fn watch(root: &Path, options: &Options, stopping: &AtomicBool) -> Result<()
     );
     let config = config.canonicalize()?;
     let mut roots = vec![
-        root.join("src"),
+        root.join("crates/backend"),
         root.join("Cargo.toml"),
         root.join("Cargo.lock"),
         config.clone(),
@@ -100,6 +100,13 @@ pub fn watch(root: &Path, options: &Options, stopping: &AtomicBool) -> Result<()
     )
     .join("debug/hagency-server");
     let mut server = Server(None);
+    let frontend_roots = [
+        root.join("crates/frontend"),
+        root.join("Cargo.toml"),
+        root.join("Cargo.lock"),
+    ];
+    let mut frontend_before = None;
+    let mut frontend_ready = false;
     let mut before = None;
     let mut component_roots = Vec::new();
     while !stopping.load(Ordering::Relaxed) {
@@ -108,12 +115,36 @@ pub fn watch(root: &Path, options: &Options, stopping: &AtomicBool) -> Result<()
         if let Ok(paths) = component_files(&config) {
             component_roots = paths;
         }
+        let frontend_current = snapshot(frontend_roots.iter())?;
+        if frontend_before.as_ref() != Some(&frontend_current) {
+            frontend_before = Some(frontend_current);
+            frontend_ready = false;
+            println!("Building hagency-frontend…");
+            if let Err(error) = frontend::prepare(root, &frontend::Options::default(), stopping) {
+                eprintln!("Frontend build failed; keeping the previous assets/server: {error:#}");
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+            frontend_ready = true;
+        }
+        if !frontend_ready {
+            thread::sleep(Duration::from_millis(500));
+            continue;
+        }
         let current = snapshot(roots.iter().chain(&component_roots))?;
         if before.as_ref() != Some(&current) {
             before = Some(current);
             println!("Building hagency-server…");
-            if command::run(cargo().args(["build", "--bin", "hagency-server"]), stopping)?
-                && !stopping.load(Ordering::Relaxed)
+            if command::run(
+                cargo().args([
+                    "build",
+                    "--package",
+                    "hagency-server",
+                    "--bin",
+                    "hagency-server",
+                ]),
+                stopping,
+            )? && !stopping.load(Ordering::Relaxed)
             {
                 if let Some(source) = &pasion_source {
                     let prepare = assets::Options {

@@ -71,7 +71,7 @@ pub fn prepare(root: &Path, options: &Options, stopping: &AtomicBool) -> Result<
 
 fn pinned_source(root: &Path, stopping: &AtomicBool) -> Result<PathBuf> {
     let manifest: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
-    let dependency = &manifest["dependencies"]["pasion-backend"];
+    let dependency = &manifest["workspace"]["dependencies"]["pasion-backend"];
     if let Some(path) = dependency.get("path").and_then(toml::Value::as_str) {
         let path = root.join(path).canonicalize()?;
         return Ok(path
@@ -113,7 +113,7 @@ fn pinned_source(root: &Path, stopping: &AtomicBool) -> Result<PathBuf> {
     Ok(source)
 }
 
-fn dioxus_cli(root: &Path, stopping: &AtomicBool) -> Result<PathBuf> {
+pub(crate) fn dioxus_cli(root: &Path, stopping: &AtomicBool) -> Result<PathBuf> {
     if let Ok(output) = Command::new("dx").arg("--version").output()
         && output.status.success()
         && String::from_utf8_lossy(&output.stdout).starts_with("dioxus 0.7.5 ")
@@ -204,7 +204,7 @@ fn install_dx(archive: &Path, checksum: &str, destination: &Path) -> Result<()> 
     bail!("Dioxus archive did not contain a dx executable")
 }
 
-fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
+pub(crate) fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)
         .with_context(|| format!("Read Pasion resources in {}", source.display()))?

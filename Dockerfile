@@ -3,8 +3,7 @@ FROM rust:1.98-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev cmake clang && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY public ./public
+COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
@@ -12,9 +11,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp target/release/hagency-server /build/hagency-server
 
 # Build the Dioxus WASM app with the same pinned Pasion source as the backend.
-FROM rust:1.98-trixie AS pasion-assets
+FROM rust:1.98-trixie AS web-tools
 ARG TARGETARCH
-ARG PASION_REV=03cd9f94c0c0593c3979de68a0b11ee443f23933
 RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
 RUN case "$TARGETARCH" in arm64) dx_arch=aarch64 ;; amd64) dx_arch=x86_64 ;; *) exit 1 ;; esac \
@@ -22,6 +20,19 @@ RUN case "$TARGETARCH" in arm64) dx_arch=aarch64 ;; amd64) dx_arch=x86_64 ;; *) 
     && curl -fsSL "https://github.com/DioxusLabs/dioxus/releases/download/v0.7.5/dx-$dx_arch-unknown-linux-gnu.sha256" -o /tmp/dx.sha256 \
     && sed -n '1s/  .*/  \/tmp\/dx.tar.gz/p' /tmp/dx.sha256 | sha256sum -c - \
     && tar -xzf /tmp/dx.tar.gz -C /usr/local/bin && rm /tmp/dx.tar.gz /tmp/dx.sha256
+FROM web-tools AS frontend-assets
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY xtask ./xtask
+RUN --mount=type=cache,id=hagency-frontend-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=hagency-frontend-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=hagency-frontend-target,target=/build/.run/frontend-target \
+    --mount=type=cache,id=hagency-xtask-target,target=/build/xtask/target \
+    cargo run --quiet --locked --manifest-path xtask/Cargo.toml -- prepare-frontend --output /frontend-resources
+
+FROM web-tools AS pasion-assets
+ARG PASION_REV=03cd9f94c0c0593c3979de68a0b11ee443f23933
 RUN git init /pasion && git -C /pasion remote add origin https://github.com/meldry-com/pasion.git \
     && git -C /pasion fetch --depth 1 origin "$PASION_REV" && git -C /pasion checkout --detach FETCH_HEAD
 WORKDIR /build
@@ -38,6 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq5 ca-certi
 WORKDIR /app
 COPY --from=build /build/hagency-server /usr/local/bin/hagency-server
 COPY --from=pasion-assets /pasion-resources /app/resources/pasion
+COPY --from=frontend-assets /frontend-resources /app/resources/frontend/public
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 EXPOSE 8088
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

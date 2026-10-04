@@ -33,7 +33,7 @@ try{
  await start(true);let session=await login();
  const tables=(url)=>execFileSync('psql',[url,'-Atc',"SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='public' ORDER BY tablename"],{encoding:'utf8'}).trim().split('\n');
  assert.deepEqual(tables(adminDatabase),['hagency_admin_state']);assert.ok(tables(database).includes('users'));assert.ok(!tables(database).includes('hagency_admin_state'));evidence.push('Hagency and Palpo tables live in separate databases');evidence.push('real administrator login');
- const html=await fetch(base);assert.equal(html.status,200);assert.equal(await html.text(),await readFile('public/index.html','utf8'));evidence.push('unchanged static frontend on same listener');
+ const html=await fetch(base);assert.equal(html.status,200);assert.equal(await html.text(),await readFile('resources/frontend/public/index.html','utf8'));evidence.push('Dioxus SPA frontend on same listener');
  assert.equal((await fetch(base+'/_matrix/client/versions')).status,200);const discovery=await(await fetch(base+'/.well-known/matrix/client')).json();assert.equal(discovery['m.homeserver'].base_url,base);evidence.push('mounted Matrix APIs and discovery');
  const fleet=await api('/fleets',{method:'POST',body:{requestId:'real-fleet-1',name:'Real outbound fleet',ownerMxid:`@admin:${serverName}`},session});assert.equal(fleet.status,201,JSON.stringify(fleet.data));const id=fleet.data.fleet.id;
  const pair=(await api('/my/fleets/'+id+'/pair',{method:'POST',body:{},session})).data;assert.ok(pair.transport.token);assert.ok(pair.registration.as_token);evidence.push('real App Service registration and representative provisioning');

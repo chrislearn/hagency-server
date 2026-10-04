@@ -8,3 +8,8 @@ https://github.com/palpo-im/palpo/tree/3f1ad3ba5c80a7206521b3eb4059a4f1f3786700
 Pasion is embedded from meldry-com/pasion under AGPL-3.0-only.
 The combined hagency-server distribution uses AGPL-3.0-only; the original
 Apache-2.0 notices and license for the Palpo-derived code remain included.
+
+The Dioxus frontend in crates/frontend derives from meldry-com/padmin,
+Copyright Meldry Team and contributors, licensed under AGPL-3.0-or-later.
+Source snapshot: https://github.com/meldry-com/padmin/tree/83d4567470ada808b89914aa0c786cdc3a7ac89a
+Its original license is included in crates/frontend/LICENSE.

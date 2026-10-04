@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -39,7 +39,9 @@ const upstream = createServer(async (req, res) => {
         f.actors.set('new-user:' + mxid, mxid); f.users.set(mxid, { name: mxid, admin: false, deactivated: false });
         response = output(200, { user_id: mxid, device_id: body.device_id, access_token: 'new-user:' + mxid });
       }
-    } else if (path === '/_matrix/client/v3/login' && credentials.has(body.identifier.user)) {
+    } else if (path === '/_matrix/client/v3/account/whoami' && req.headers.authorization==='Bearer guest-test') response=output(200,{user_id:'@owner:example.test',is_guest:true});
+    else if (path === '/_matrix/client/v3/account/whoami' && req.headers.authorization==='Bearer foreign-test') response=output(200,{user_id:'@owner:other.test'});
+    else if (path === '/_matrix/client/v3/login' && credentials.has(body.identifier.user)) {
       response = output(credentials.get(body.identifier.user) === body.password ? 200 : 403, credentials.get(body.identifier.user) === body.password ? { user_id: body.identifier.user, access_token: 'new-user:' + body.identifier.user } : { errcode: 'M_FORBIDDEN' });
     } else if (path.startsWith('/_palpo/admin/v1/whois/')) {
       const mxid = path.slice('/_palpo/admin/v1/whois/'.length);
@@ -79,8 +81,30 @@ const adminHeaders = session => ({ Cookie: session.cookie, 'X-CSRF-Token': sessi
 try {
   await until(async () => { if (child.exitCode !== null) throw new Error(stderr); const r = await fetch(base); return r.status === 200; }, 30000);
   const admin = await login(), owner = await login('owner'), other = await login('other');
-  await check('frontend files unchanged and hosted by Rust', async () => {
-    for (const [path,file] of [['/','index.html'],['/app.js','app.js'],['/accounts.js','accounts.js'],['/style.css','style.css']]) { const r = await fetch(base + path); assert.equal(r.status,200); assert.deepEqual(Buffer.from(await r.arrayBuffer()),await readFile('public/' + file)); assert.match(r.headers.get('content-security-policy'),/frame-ancestors 'none'/); }
+  await check('Dioxus frontend SPA, runtime config and safe same-origin assets', async () => {
+    const html=await readFile('resources/frontend/public/index.html');
+    for (const path of ['/','/login','/hagency/projects','/hagency/connections','/users','/pasion/accounts']) {
+        const r=await fetch(base+path);assert.equal(r.status,200,path);assert.deepEqual(Buffer.from(await r.arrayBuffer()),html);
+        assert.match(r.headers.get('content-security-policy'),/wasm-unsafe-eval/);
+    }
+    const conf=await(await fetch(base+'/config.json')).json();assert.equal(conf.server_name,'example.test');assert.equal(conf.oauth_enabled,false);assert.equal(conf.pasion_enabled,false);assert.ok(!JSON.stringify(conf).includes('secret'));
+    assert.equal((await fetch(base+'/assets/missing.wasm')).status,404);
+    assert.equal((await fetch(base+'/assets/%2e%2e%2fCargo.toml')).status,404);
+    assert.equal((await fetch(base+'/_matrix/not-a-route')).status,404);
+    const wasm="/assets/"+(await readdir("resources/frontend/public/assets")).find(p=>p.endsWith(".wasm"));
+    const r=await fetch(base+wasm);assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),'application/wasm');assert.equal(Buffer.from(await r.arrayBuffer()).subarray(0,4).toString('hex'),'0061736d');
+  });
+  await check('Matrix token bridge validates live identity, administrator role and request Origin',async()=>{
+    assert.equal((await api('/login/token',{method:'POST',body:{}})).status,401);
+    assert.equal((await api('/login/token',{method:'POST',body:{},headers:{Authorization:'Bearer invalid'}})).status,401);
+    assert.equal((await api('/login/token',{method:'POST',body:{},headers:{Authorization:'Bearer owner-secret',Origin:'https://evil.invalid'}})).status,403);
+    for(const [token,status] of [['guest-test',403],['foreign-test',400]]) assert.equal((await api('/login/token',{method:'POST',body:{},headers:{Authorization:'Bearer '+token}})).status,status);
+    for(const [token,isAdmin] of [['admin-secret',true],['owner-secret',false]]) {
+        const r=await api('/login/token',{method:'POST',body:{isAdmin:true},headers:{Authorization:'Bearer '+token}});assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.isAdmin,isAdmin);
+        const session={...r.data,cookie:r.response.headers.get('set-cookie').split(';')[0]};
+        assert.equal((await api('/fleets',{session})).status,isAdmin?200:403);
+        assert.equal((await api('/projects',{method:'POST',session,body:{},headers:{'X-CSRF-Token':'bad'}})).status,403);
+    }
   });
   await check('host, Origin, cookie, CSRF and live administrator checks', async () => {
     assert.equal((await api('/session')).status,401);

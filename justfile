@@ -23,13 +23,23 @@ prepare-pasion *args:
     rustup target add wasm32-unknown-unknown
     {{ xtask }} prepare-pasion "$@"
 
+# Build the integrated Padmin/Hagency WASM frontend.
+prepare-frontend *args:
+    rustup target add wasm32-unknown-unknown
+    {{ xtask }} prepare-frontend "$@"
+
+# Build all browser assets and the server.
+build:
+    just prepare-frontend
+    cargo build --locked -p hagency-server
+
 # Watch source/configuration and gracefully replace successful server builds.
 dev *args:
     {{ xtask }} dev "$@"
 
 # Run the server once; accepts --config and bootstrap options.
 run *args:
-    cargo run --locked --bin hagency-server -- "$@"
+    cargo run --locked -p hagency-server --bin hagency-server -- "$@"
 
 # Validate the host and referenced component configurations without starting.
 check-config config="config/dev/hagency.toml":

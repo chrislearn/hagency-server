@@ -2,6 +2,7 @@ mod assets;
 mod command;
 mod config;
 mod dev;
+mod frontend;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -22,6 +23,8 @@ enum Task {
     InitConfig(config::Options),
     /// Build/copy Pasion resources using the pinned or a local source tree.
     PreparePasion(assets::Options),
+    /// Build and publish the integrated Dioxus administration frontend.
+    PrepareFrontend(frontend::Options),
     /// Watch changes, compile, validate and gracefully replace the server.
     Dev(dev::Options),
 }
@@ -43,6 +46,7 @@ fn main() -> Result<()> {
     match args.command {
         Task::InitConfig(options) => config::generate(&root, &options),
         Task::PreparePasion(options) => assets::prepare(&root, &options, &stopping),
+        Task::PrepareFrontend(options) => frontend::prepare(&root, &options, &stopping),
         Task::Dev(options) => dev::watch(&root, &options, &stopping),
     }
 }

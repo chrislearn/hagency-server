@@ -44,12 +44,20 @@ try{
  const login=await api('/auth/login',{username:'prefixuser',password});assert.equal(login.status,'success',JSON.stringify(login));assert.equal(login.viewer.username,'prefixuser');
  assert.ok(cookie,'Pasion browser login must set its cookie');const viewer=await api('/viewer');assert.ok(JSON.stringify(viewer).includes('prefixuser'));
  await until(async()=>execFileSync('psql',[matrix,'-Atc',`SELECT count(*) FROM public.users WHERE id='@prefixuser:localhost:${port}'`],{encoding:'utf8'}).trim()==='1');
+ const nativeRuntime=await(await fetch(base+'/config.json')).json();assert.equal(nativeRuntime.oauth_enabled,false);assert.equal(nativeRuntime.pasion_enabled,true);
  const secrets=await readFile(join(dir,'data/pasion-secrets.json'),'utf8');
  await stop();await configure(true);await start();assert.equal(await readFile(join(dir,'data/pasion-secrets.json'),'utf8'),secrets);
  assert.deepEqual(await(await fetch(base+'/_pasion/oauth2/keys.json')).json(),jwks);
  const authentication=await(await fetch(base+'/.well-known/matrix/client')).json();assert.equal(authentication['m.authentication'].issuer,base+'/_pasion/');
  const matrixLogin=await fetch(base+'/_matrix/client/v3/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:'m.login.password',identifier:{type:'m.id.user',user:'prefixuser'},password})});const token=await matrixLogin.json();assert.equal(matrixLogin.status,200,JSON.stringify(token));assert.ok(token.access_token);
  const me=await fetch(base+'/_matrix/client/v3/account/whoami',{headers:{authorization:'Bearer '+token.access_token}});assert.equal(me.status,200,await me.clone().text());assert.equal((await me.json()).user_id,`@prefixuser:localhost:${port}`);
+ const runtime=await(await fetch(base+'/config.json')).json();assert.equal(runtime.oauth_enabled,true);assert.equal(runtime.oauth_client_id,'01KMQPADM1N000000000000000');
+ const bridge=await fetch(base+'/api/login/token',{method:'POST',headers:{'content-type':'application/json',Origin:base,authorization:'Bearer '+token.access_token},body:'{}'});assert.equal(bridge.status,200,await bridge.clone().text());assert.equal((await bridge.json()).isAdmin,false);
+ if(process.env.HAGENCY_BROWSER_HOLD) {
+    await writeFile(process.env.HAGENCY_BROWSER_HOLD,JSON.stringify({base,username:'prefixuser',password}),{mode:0o600});
+    console.log('Browser verification server ready:',base);
+    const end=Date.now()+1200000;while(Date.now()<end) {try{await readFile(process.env.HAGENCY_BROWSER_HOLD+'.stop');break;}catch{}await pause(500);}
+ }
  await stop();
  console.log('PASS Pasion: three component config files and isolated databases, same listener, prefixed discovery/SPA/JS/WASM/API, browser registration/login, delegated Matrix password/token introspection, stable keys on restart, graceful shutdown');
  if(process.env.HAGENCY_KEEP_TEST_CONFIG)await writeFile(process.env.HAGENCY_KEEP_TEST_CONFIG,await readFile(config),{mode:0o600});

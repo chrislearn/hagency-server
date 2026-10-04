@@ -259,14 +259,14 @@ fn watcher_keeps_working_server_on_failure_and_watches_external_component_files(
     for path in [
         bin.clone(),
         target.join("debug"),
-        root.join("src"),
+        root.join("crates/backend/src"),
         root.join("external"),
         palpo.join("crates/server/src"),
     ] {
         fs::create_dir_all(path).unwrap();
     }
     fs::write(root.join("Cargo.toml"), "# fixture").unwrap();
-    fs::write(root.join("src/main.rs"), "# fixture").unwrap();
+    fs::write(root.join("crates/backend/src/main.rs"), "# fixture").unwrap();
     fs::write(palpo.join("crates/server/src/lib.rs"), "# fixture").unwrap();
     let config = root.join("config/host.toml");
     let text =
@@ -275,6 +275,17 @@ fn watcher_keeps_working_server_on_failure_and_watches_external_component_files(
     for name in ["palpo", "pasion"] {
         fs::write(root.join(format!("external/{name}.toml")), "# fixture").unwrap();
     }
+    executable(
+        &bin.join("dx"),
+        r#"#!/bin/sh
+if [ "$1" = --version ]; then echo 'dioxus 0.7.5 fixture'; exit 0; fi
+echo frontend >> events
+if [ -f crates/frontend/failure.rs ]; then echo frontend_failed >> events; exit 1; fi
+mkdir -p "$CARGO_TARGET_DIR/dx/hagency-frontend/release/web/public/assets"
+echo frontend > "$CARGO_TARGET_DIR/dx/hagency-frontend/release/web/public/index.html"
+"#,
+    );
+    fs::create_dir_all(root.join("crates/frontend")).unwrap();
     let metadata = serde_json::json!({"target_directory": target}).to_string();
     executable(
         &bin.join("cargo"),
@@ -288,7 +299,7 @@ METADATA
 ;;
 build)
   echo build >> events
-  if [ -f src/failure.rs ]; then echo failed >> events; exit 1; fi
+  if [ -f crates/backend/src/failure.rs ]; then echo failed >> events; exit 1; fi
   ;;
 *) exit 2 ;;
 esac
@@ -332,11 +343,15 @@ while :; do sleep 1; done
         palpo.join("crates/server").to_str().unwrap()
     );
 
-    fs::write(root.join("src/failure.rs"), "# compile failure").unwrap();
+    fs::write(
+        root.join("crates/backend/src/failure.rs"),
+        "# compile failure",
+    )
+    .unwrap();
     until(root, || count(root, "failed") == 1);
     assert_eq!(count(root, "start"), 1);
     assert_eq!(count(root, "stop"), 0);
-    fs::remove_file(root.join("src/failure.rs")).unwrap();
+    fs::remove_file(root.join("crates/backend/src/failure.rs")).unwrap();
     until(root, || count(root, "start") == 2);
     assert_eq!(count(root, "stop"), 1);
 
@@ -352,8 +367,57 @@ while :; do sleep 1; done
     }
     fs::write(palpo.join("crates/server/src/lib.rs"), "# local change").unwrap();
     until(root, || count(root, "start") == 6);
+    let builds = count(root, "build");
+    fs::write(root.join("crates/frontend/failure.rs"), "# fail").unwrap();
+    until(root, || count(root, "frontend_failed") == 1);
+    assert_eq!(count(root, "start"), 6);
+    assert_eq!(count(root, "stop"), 5);
+    fs::remove_file(root.join("crates/frontend/failure.rs")).unwrap();
+    until(root, || count(root, "frontend") == 3);
+    assert_eq!(count(root, "build"), builds);
+    assert_eq!(count(root, "start"), 6);
     // SAFETY: signal only this test's watcher, not the user's service.
     unsafe { libc::kill(watcher.0.id() as i32, libc::SIGTERM) };
     assert!(watcher.0.wait().unwrap().success());
     assert_eq!(count(root, "stop"), 6);
+}
+
+#[test]
+fn concurrent_frontend_builds_do_not_overlap_dioxus_working_files() {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    executable(
+        &bin.join("dx"),
+        r#"#!/bin/sh
+if [ "$1" = --version ]; then echo 'dioxus 0.7.5 fixture'; exit 0; fi
+mkdir .run/dx-active || exit 3
+sleep 0.3
+mkdir -p "$CARGO_TARGET_DIR/dx/hagency-frontend/release/web/public/assets"
+echo compiled > "$CARGO_TARGET_DIR/dx/hagency-frontend/release/web/public/index.html"
+rmdir .run/dx-active
+"#,
+    );
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let path = std::env::join_paths(paths).unwrap();
+    let mut first = task(root)
+        .arg("prepare-frontend")
+        .env("PATH", &path)
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut second = task(root)
+        .arg("prepare-frontend")
+        .env("PATH", &path)
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(first.wait().unwrap().success());
+    assert!(second.wait().unwrap().success());
+    assert_eq!(
+        fs::read_to_string(root.join("resources/frontend/public/index.html")).unwrap(),
+        "compiled\n"
+    );
 }

@@ -1,11 +1,18 @@
-[package]
-name = "hagency-server"
+[workspace]
+members = ["crates/*"]
+default-members = ["crates/backend"]
+exclude = ["xtask"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
 license = "AGPL-3.0-only"
+repository = "https://github.com/chrislearn/hagency-server"
+publish = false
 
-[dependencies]
+[workspace.dependencies]
 # Palpo embedding API; pin until the upstream PR is merged.
 palpo = { git = "https://github.com/palpo-im/palpo.git", rev = "c8568d9844a6be0a3172d98d7c9810e3a1f7521c" }
 pasion-backend = { git = "https://github.com/meldry-com/pasion.git", rev = "03cd9f94c0c0593c3979de68a0b11ee443f23933", features = ["cedar"] }
@@ -41,11 +48,9 @@ aes-gcm = "0.10"
 hex = "0.4"
 unicode-normalization = "0.1"
 
-[dev-dependencies]
+percent-encoding = "2.3"
 tempfile = "3"
 
-# Palpo is a large crate. Keep release builds within ordinary Docker VM memory;
-# cryptography, database and HTTP dependencies retain full optimization.
 [profile.release.package.palpo]
 opt-level = 1
 codegen-units = 256

@@ -239,3 +239,58 @@ Image manifest:
 `sha256:35c0a571c3f33607d2ef6187aa35a67a420e50fdd9f57ea2246c0c324bae6b6d`.
 Docker-reported size: 439,287,638 bytes. Python and the Rust development helper
 are absent from the final runtime image.
+
+## Backend/frontend workspace and integrated Padmin (2026-10-04)
+
+This section supersedes earlier references to unchanged embedded HTML/JS assets.
+The host is now the `crates/backend` package in a virtual Cargo workspace;
+`crates/frontend` is copied Padmin source with native Dioxus Hagency pages.
+Padmin provenance is recorded in NOTICE and its original AGPL license is retained.
+
+Executed checks:
+
+- Backend formatting, strict all-target Clippy, six unit/config tests passed.
+  The dedicated PostgreSQL single-writer test remains opt-in; real restart and
+  database isolation are covered by the integration scripts below.
+- Frontend Dioxus/WASM release build passed. Ten native frontend tests passed,
+  including member/admin OAuth scope separation, Matrix IDs containing ports
+  or IPv6 servers, and published resource role aggregation.
+- `just check-tools` passed: formatting, strict Clippy, CLI verification,
+  private configuration generation, local Pasion assets, watcher recovery and
+  external component configuration watching. Concurrent frontend builds are
+  serialized so Dioxus bundling cannot overwrite another build's working files.
+- Eleven controlled HTTP contract groups passed: SPA paths and WASM MIME/magic,
+  runtime configuration, reserved route isolation, traversal rejection, the
+  token-to-cookie bridge, live administrator checks, Origin/CSRF, owner isolation,
+  callback and outbound pairing, project/request workflows, account approvals,
+  retirement, durable delivery and credential revocation.
+- Real Palpo integration passed against separate empty Hagency/Palpo databases:
+  administrator login, App Service installation, actual relay/proof delivery,
+  persisted queue and signing keys across graceful restart.
+- Real Pasion integration passed against three separate empty databases:
+  mounted discovery/SPA/API, registration/login, delegated Matrix login and
+  token introspection, reserved frontend client/runtime settings, member token
+  bridge, stable keys and graceful restart. Temporary test databases were removed.
+- Browser verification used separate sessions for the running native test server
+  and an isolated OAuth server. Native administrator login, Dashboard, Users,
+  Rooms, Hagency connections, projects, requests and approvals rendered without
+  uncaught JavaScript errors. A host restart successfully rebound the existing
+  in-memory Matrix token to a new Hagency cookie. The corrected user list keeps
+  `@admin:localhost:8088` intact.
+- OAuth member login reached Projects with only service navigation; `/api/fleets`
+  returned 403. An account granted administrator status in both isolated Pasion
+  and Palpo databases completed the administrator OAuth flow and opened Padmin's
+  Pasion account list. These test promotions did not affect development accounts.
+
+Current limits: Padmin's optional `palpo_admin` sidecar operation screens are
+retained as source, but their menu is disabled because the sidecar is not embedded.
+Pasion and Matrix administrator roles remain separate. Full page reloads require
+sign-in because bearer/refresh tokens are held in memory; SPA navigation does not.
+
+The final Docker image also passed `tests/docker-smoke.mjs` in its own Compose
+project: three independent databases, native Matrix administrator login,
+Dioxus index/SPA routes and linked JS/WASM served by the Rust process, runtime
+configuration and mounted Matrix/Pasion APIs, UID 10001, mode-0600 config/key
+files, graceful restart and persistent Matrix/Pasion signing keys. Its temporary
+containers and volumes were removed. The local development server remains at
+`http://127.0.0.1:8088/`, with Pasion account UI at `/_pasion/`.
