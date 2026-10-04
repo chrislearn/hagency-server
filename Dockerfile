@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM rust:1.98-trixie AS pasion-assets
 ARG TARGETARCH
 ARG PASION_REV=b8333e1ee60c6362847d0f1890461b7af7547037
-RUN apt-get update && apt-get install -y --no-install-recommends curl python3 nodejs && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
 RUN case "$TARGETARCH" in arm64) dx_arch=aarch64 ;; amd64) dx_arch=x86_64 ;; *) exit 1 ;; esac \
     && curl -fsSL "https://github.com/DioxusLabs/dioxus/releases/download/v0.7.5/dx-$dx_arch-unknown-linux-gnu.tar.gz" -o /tmp/dx.tar.gz \
@@ -25,10 +25,12 @@ RUN case "$TARGETARCH" in arm64) dx_arch=aarch64 ;; amd64) dx_arch=x86_64 ;; *) 
 RUN git init /pasion && git -C /pasion remote add origin https://github.com/meldry-com/pasion.git \
     && git -C /pasion fetch --depth 1 origin "$PASION_REV" && git -C /pasion checkout --detach FETCH_HEAD
 WORKDIR /build
-COPY scripts/prepare-pasion.py /build/scripts/prepare-pasion.py
+COPY xtask /build/xtask
 RUN --mount=type=cache,id=hagency-pasion-wasm-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=hagency-pasion-wasm-target,target=/pasion/target \
-    python3 scripts/prepare-pasion.py --source /pasion --output /pasion-resources
+    --mount=type=cache,id=hagency-xtask-target,target=/build/xtask/target \
+    cargo run --quiet --locked --manifest-path xtask/Cargo.toml -- \
+    prepare-pasion --source /pasion --output /pasion-resources
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 ca-certificates gosu && rm -rf /var/lib/apt/lists/* \

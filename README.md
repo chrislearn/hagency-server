@@ -39,18 +39,22 @@ binary does. Matrix background workers stop with the runtime.
 
 ## Development
 
-Requirements: Rust >=1.94, PostgreSQL client library (`libpq`), and Docker for
+Requirements: Rust >=1.94, [just](https://github.com/casey/just), PostgreSQL client library (`libpq`), and Docker for
 the PostgreSQL service. Embedded Pasion also needs the wasm32-unknown-unknown
-target and Dioxus 0.7.5 assets; the preparation script downloads the matching
-Dioxus CLI when necessary. Node is used during frontend build and HTTP tests.
+target and Dioxus 0.7.5 assets; resource preparation downloads the matching
+Dioxus CLI when necessary. Git and curl are used for fetching build tools/source.
+Node is used during frontend build and HTTP tests. Python is not required.
+
+`just --list` shows the commands. Just orchestrates them; an independent Rust
+`xtask` implements private configuration generation, asset preparation and the
+development watcher without compiling the server to run these tools.
 
 ```sh
-python3 scripts/init-config.py --dev
-docker compose up -d postgres
-rustup target add wasm32-unknown-unknown
-python3 scripts/prepare-pasion.py
+just init-dev
+just db-up
+just prepare-pasion
 # On a new database, bootstrap an administrator as described below first.
-python3 scripts/dev.py
+just dev
 ```
 
 Open `http://127.0.0.1:8088`. This development config uses
@@ -63,10 +67,10 @@ so a server restart requires signing in again.
 For Palpo source development, use a local checkout with the MatrixServer API:
 
 ```sh
-python3 scripts/dev.py --palpo-source /absolute/path/to/palpo-checkout
+just dev --palpo-source /absolute/path/to/palpo-checkout
 ```
 
-The script writes a local Cargo patch under ignored `.run/`, watches the local
+The development tool writes a local Cargo patch under ignored `.run/`, watches the local
 Palpo sources, and rebuilds against them. It does not modify the upstream
 checkout or require a rebuilt Docker image. Cargo may update its lockfile when
 switching between the pinned Git dependency and a local patch; return to the
@@ -132,7 +136,7 @@ with a password file, then start the same application:
 
 ```sh
 # Put a strong password in a protected file named secrets/admin-password.
-cargo run -- --config config/dev/hagency.toml --bootstrap-admin admin \
+just run --config config/dev/hagency.toml --bootstrap-admin admin \
   --bootstrap-password-file secrets/admin-password
 ```
 
@@ -154,10 +158,10 @@ used for Hagency final-allocation retirement.
 ## Compose deployment
 
 ```sh
-python3 scripts/init-config.py --origin https://palpo.instance \
+just init-docker --origin https://palpo.instance \
   --server-name palpo.instance
-docker compose up -d postgres
-docker compose build server
+just db-up
+just docker-build
 ```
 
 This creates `config/docker/{hagency,palpo,pasion}.toml` and a protected `.env`
@@ -229,6 +233,7 @@ until a separately validated migration is provided.
 ## Validation
 
 ```sh
+just check-tools
 cargo fmt --check
 cargo check --all-targets --locked
 cargo test --locked
@@ -307,13 +312,13 @@ database pool and TLS settings are retained. All three databases remain separate
 For native development, build Pasion's Dioxus WASM frontend/resources once:
 
 ```sh
-python3 scripts/prepare-pasion.py
-python3 scripts/dev.py --pasion-source /path/to/pasion --palpo-source /path/to/palpo
+just prepare-pasion
+just dev --pasion-source /path/to/pasion --palpo-source /path/to/palpo
 ```
 
-`prepare-pasion.py` uses the pinned source by default; `--source` takes a local
-checkout. It requires Rust's `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
-The script reuses `dx` 0.7.5 or fetches a matching, checksum-verified CLI into
+`just prepare-pasion` uses the pinned source by default; `--source` takes a local
+checkout. It installs Rust's `wasm32-unknown-unknown` target if needed.
+The Rust tool reuses `dx` 0.7.5 or fetches a matching, checksum-verified CLI into
 `.run/tools/` without replacing a globally installed version.
 The development watcher rebuilds edited Pasion backend/frontend code and
 copies templates/translations/policies, then gracefully replaces the server.

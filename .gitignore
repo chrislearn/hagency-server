@@ -1,12 +1,11 @@
 /target/
+/xtask/target/
 /data/
 /config.toml
 /config.dev.toml
 /config.docker.toml
 /.run/
 .env
-
-__pycache__/
 
 /resources/pasion/
 /backups/

@@ -205,3 +205,37 @@ Image manifest:
 `sha256:c6efb58bc46828c5464a4a87b1442a3dd9014618b05f36c6e611508c17ad5ea7`.
 Docker-reported size: 439,287,638 bytes. Native test PostgreSQL was also removed;
 existing application stacks/databases were not restarted or migrated.
+
+## Just commands and Rust development tools (2026-10-04)
+
+The three Python tools have been replaced by an independent Rust `xtask` and a
+root `justfile`. Configuration paths/schema, the server binary and frontend
+behavior are unchanged. Docker asset preparation also uses the Rust tool and
+does not install Python.
+
+Executed checks:
+
+- `just check-tools`: formatter, strict all-target Clippy and four tests passed.
+  The tests cover private profile permissions, password URI escaping, separate
+  database names, preservation of existing credentials/configuration, local
+  resource copying, and checksum verification before installing Dioxus.
+- The watcher was exercised with isolated compiler/server fixtures: compilation
+  and configuration failures preserve the running process; recovery, external
+  Palpo/Pasion config edits and local Palpo source edits trigger replacement;
+  SIGTERM gracefully stops the child. Custom Cargo target directories and paths
+  containing spaces are supported.
+- Actual just recipes generated a temporary three-file development profile and
+  validated it with the real server's `--check-config`; local Pasion resources
+  were copied through `just prepare-pasion --skip-frontend`. Arguments containing
+  spaces passed intact. Existing private configuration files were preserved.
+- Just/server formatting, diff whitespace and Compose configuration checks passed.
+- Linux arm64 image built successfully using the Rust resource preparation tool,
+  including a real Dioxus WASM build. The isolated Compose smoke test passed:
+  three component configurations and separate databases, non-root process,
+  same-port web-admin/Matrix/Pasion, administrator login, stable keys and restart.
+  The test removed its containers/volumes; existing services were not restarted.
+
+Image manifest:
+`sha256:35c0a571c3f33607d2ef6187aa35a67a420e50fdd9f57ea2246c0c324bae6b6d`.
+Docker-reported size: 439,287,638 bytes. Python and the Rust development helper
+are absent from the final runtime image.
