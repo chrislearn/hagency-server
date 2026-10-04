@@ -10,3 +10,11 @@ delegate_matrix_auth = false
 # [account]
 # password_registration_enabled = true
 # password_registration_contact_required = false
+
+# Local tests only: persist this email/SMS verification code without sending it.
+# [experimental]
+# fixed_verification_code = "123456"
+# [email.provider]
+# type = "blackhole"
+# [sms.provider]
+# type = "blackhole"

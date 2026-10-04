@@ -325,6 +325,23 @@ copies templates/translations/policies, then gracefully replaces the server.
 No image rebuild is involved. Docker builds and packages those resources as
 part of its image.
 
+For local registration tests, enable `[account].password_registration_enabled`
+and set the following native options in `config/dev/pasion.toml`:
+
+```toml
+[experimental]
+fixed_verification_code = "123456"
+[email.provider]
+type = "blackhole"
+[sms.provider]
+type = "blackhole"
+```
+
+Email and SMS contact verification then store `123456` and skip outbound
+verification notifications. Enter that code on the verification page; resend
+once if a registration started before this setting was enabled. The watcher
+reloads this file. Leave the fixed-code option unset outside local tests.
+
 Mounting Pasion and switching Matrix login are independent choices.
 `[hagency].delegate_matrix_auth = false` in `pasion.toml` preserves Palpo's existing native login.
 Set it to `true` **after preparing Pasion accounts** to advertise MSC3861 and

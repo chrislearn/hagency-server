@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Build the Dioxus WASM app with the same pinned Pasion source as the backend.
 FROM rust:1.98-trixie AS pasion-assets
 ARG TARGETARCH
-ARG PASION_REV=b8333e1ee60c6362847d0f1890461b7af7547037
+ARG PASION_REV=0e70bf896c4bc39ee179ddf55e895c27749b18ae
 RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
 RUN case "$TARGETARCH" in arm64) dx_arch=aarch64 ;; amd64) dx_arch=x86_64 ;; *) exit 1 ;; esac \
