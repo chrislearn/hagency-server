@@ -10,6 +10,11 @@ pub fn Connections() -> Element {
     let mut owner = use_signal(String::new);
     let mut mode = use_signal(|| "outbound".to_owned());
     let mut callback = use_signal(String::new);
+    let session = use_resource(|| async { hagency::ensure_session().await });
+    let callback_origins = session()
+        .and_then(Result::ok)
+        .map(|s| s.callback_origins)
+        .unwrap_or_default();
     let mut operation = use_signal(|| saved_operation("authorization"));
     let mut busy = use_signal(|| false);
     let mut notice = use_signal(|| None);
@@ -33,9 +38,10 @@ pub fn Connections() -> Element {
             label { class: "hg-field", "Owner Matrix ID" input { class: "hg-input", required: true, placeholder: "@owner:server", value: owner(), oninput: move |e|owner.set(e.value()) } }
             label { class: "hg-field", "Connection" select { class: "hg-input", value: mode(), onchange: move |e|mode.set(e.value()),
                 option { value: "outbound", "Outbound — owner connects to this server" }
-                option { value: "callback", "Callback — use an allowed public URL" }
+                option { value: "callback", disabled:callback_origins.is_empty(), "Callback — use an allowed public URL" }
             } }
             if mode() == "callback" { label { class: "hg-field", "Callback URL" input { class: "hg-input", r#type: "url", required: true, value: callback(), oninput: move |e|callback.set(e.value()) } } }
+            p { class:"hg-note hg-wide", {if callback_origins.is_empty() { "No callback origins are allowed. Use outbound, or configure the server callback policy.".into() } else { format!("Allowed callback origins: {}",callback_origins.join(", ")) }} }
             details { class: "hg-wide", summary { "Operation reference" } code { "{operation()}" } }
             button { class: "hg-button", r#type: "submit", disabled: busy(), if busy() { "Authorizing…" } else { "Authorize Hagency" } }
         }
@@ -131,6 +137,7 @@ pub fn MyHagencys() -> Element {
     rsx! { div { class: "hg-page",
         Heading { title: "My Hagencys", description: "Download each provider configuration into your Hagency, then verify the Matrix event channel and reception room.", resource }
         Message { notice } Status { resource }
+        RenewalWarnings { fleets:rows(&data(resource),"fleets") }
         div { class: "hg-grid", for fleet in rows(&data(resource),"fleets") { OwnedFleet { key:"{fleet[\"id\"]}", fleet, resource, busy, notice } } }
         if rows(&data(resource),"fleets").is_empty() && resource().is_some_and(|v|v.is_ok()) { p { class: "hg-note", "No Hagencys are assigned to your account. You can still create projects and request agents from available providers." } }
     } }

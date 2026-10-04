@@ -50,7 +50,7 @@ pub fn UserShow(user_id: String) -> Element {
     let mut edit_admin = use_signal(|| false);
     let mut reset_password_value = use_signal(|| String::new());
     let nav = use_navigator();
-    let has_pasion = crate::utils::storage::get_item("pasion_url").is_some();
+    let has_pasion = crate::utils::storage::get_item("oauth_enabled").as_deref() == Some("true");
 
     rsx! {
         div { class: "space-y-6",
@@ -140,7 +140,7 @@ pub fn UserShow(user_id: String) -> Element {
                                             {t("users.edit")}
                                         }
                                     }
-                                    Button {
+                                    if !has_pasion { Button {
                                         variant: ButtonVariant::Outline,
                                         onclick: move |_| {
                                             reset_password_value.set(String::new());
@@ -148,7 +148,7 @@ pub fn UserShow(user_id: String) -> Element {
                                         },
                                         Icon { name: "key".to_string(), class: "h-4 w-4 mr-1".to_string() }
                                         {t("users.reset_password")}
-                                    }
+                                    } }
                                     Button {
                                         variant: ButtonVariant::Outline,
                                         onclick: move |_| show_deactivate_dialog.set(true),

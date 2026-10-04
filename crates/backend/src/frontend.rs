@@ -28,6 +28,7 @@ impl Frontend {
                 "server_name": conf.matrix.server_name,
                 "pasion_enabled": pasion.is_some(),
                 "oauth_enabled": pasion.is_some_and(|p| p.delegate_matrix_auth),
+                "legacy_account_approval_enabled": conf.account_config.is_some() && !pasion.is_some_and(|p| p.delegate_matrix_auth),
                 "pasion_public_url": if pasion.is_some() {
                     conf.public_origin.join(MOUNT).unwrap().to_string()
                 } else { String::new() },
@@ -121,6 +122,11 @@ impl Handler for Frontend {
         }
         if req.uri().path() == "/config.json" {
             res.render(Json(self.runtime.clone()));
+            return;
+        }
+        if req.uri().path() == "/account-request" && self.runtime["oauth_enabled"] == true {
+            res.status_code(StatusCode::FOUND);
+            let _ = res.add_header(header::LOCATION, "/_pasion/register", true);
             return;
         }
         let asset = req.uri().path().starts_with("/assets/") || req.uri().path() == "/favicon.ico";

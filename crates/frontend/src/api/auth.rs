@@ -234,6 +234,34 @@ fn base64url_encode(data: &[u8]) -> Result<String, HttpError> {
 
 // ── OAuth2 Authorization Code + PKCE flow ────────────────────────────────────
 
+/// One entry point: ask Pasion for the current browser account's role. A new
+/// browser first logs in as a member; the callback upgrades a verified admin.
+pub async fn start_login() -> Result<(), HttpError> {
+    let viewer = pasion_viewer().await?;
+    start_oauth_login(viewer["viewer"]["can_request_admin"] == true).await
+}
+
+async fn pasion_viewer() -> Result<serde_json::Value, HttpError> {
+    let response = Request::get("/_pasion/api/v1/viewer")
+        .credentials(web_sys::RequestCredentials::SameOrigin)
+        .send()
+        .await
+        .map_err(|e| make_err(e.to_string()))?;
+    if !response.ok() {
+        return Err(make_err(
+            "Could not read your Pasion account. Please retry.".into(),
+        ));
+    }
+    response.json().await.map_err(|e| make_err(e.to_string()))
+}
+
+fn account_needs_admin_scope(viewer: &serde_json::Value, mxid: &str, scope: &str) -> bool {
+    let user = &viewer["viewer"];
+    user["can_request_admin"] == true
+        && user["matrix"]["mxid"] == mxid
+        && !scope.split_whitespace().any(|s| s == PASION_ADMIN_SCOPE)
+}
+
 /// Start the OAuth2 login flow: redirect the browser to Pasion's /authorize.
 ///
 /// Returns `Err` if any browser primitive (crypto, sessionStorage, …) is
@@ -253,6 +281,12 @@ pub async fn start_oauth_login(admin: bool) -> Result<(), HttpError> {
         .map_err(|e| js_err("sessionStorage set failed", e))?;
     session
         .set_item(OAUTH_STATE_KEY, &state)
+        .map_err(|e| js_err("sessionStorage set failed", e))?;
+    session
+        .set_item(
+            "hagency.oauth_admin_requested",
+            if admin { "true" } else { "false" },
+        )
         .map_err(|e| js_err("sessionStorage set failed", e))?;
 
     let redirect_uri = {
@@ -299,7 +333,7 @@ pub async fn start_oauth_login(admin: bool) -> Result<(), HttpError> {
 pub async fn handle_oauth_callback(
     code: &str,
     received_state: Option<&str>,
-) -> Result<(), HttpError> {
+) -> Result<bool, HttpError> {
     let session = session_storage()?;
     let verifier = session
         .get_item(PKCE_VERIFIER_KEY)
@@ -307,9 +341,16 @@ pub async fn handle_oauth_callback(
         .flatten()
         .ok_or_else(|| make_err("Missing PKCE verifier — please restart login".into()))?;
     let stored_state = session.get_item(OAUTH_STATE_KEY).ok().flatten();
+    let admin_requested = session
+        .get_item("hagency.oauth_admin_requested")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true");
     // Always clear the one-shot values so a replay can't reuse them.
     session.remove_item(PKCE_VERIFIER_KEY).ok();
     session.remove_item(OAUTH_STATE_KEY).ok();
+    session.remove_item("hagency.oauth_admin_requested").ok();
 
     match (stored_state.as_deref(), received_state) {
         (Some(stored), Some(received)) if stored == received => {}
@@ -383,9 +424,37 @@ pub async fn handle_oauth_callback(
 
     let whoami: WhoamiResponse =
         serde_json::from_str(&whoami.text).map_err(|e| make_err(e.to_string()))?;
+    let viewer = pasion_viewer().await?;
+    if account_needs_admin_scope(
+        &viewer,
+        &whoami.user_id,
+        token_resp.scope.as_deref().unwrap_or_default(),
+    ) {
+        if admin_requested {
+            return Err(make_err(
+                "Pasion did not grant the administrator authorization. Please sign in again."
+                    .into(),
+            ));
+        }
+        // Pasion requires a fresh password when all OAuth sessions are ended.
+        // Hold the preliminary token only in the host's HttpOnly session; its
+        // replacement bridge revokes it after the admin grant succeeds.
+        crate::api::hagency::clear_session();
+        crate::api::hagency::bind_current_token().await?;
+        storage::remove_item("access_token");
+        storage::remove_item("refresh_token");
+        start_oauth_login(true).await?;
+        return Ok(true);
+    }
     storage::set_item("user_id", &whoami.user_id);
     crate::api::hagency::clear_session();
-    crate::api::hagency::bind_current_token().await?;
+    let bound = crate::api::hagency::bind_current_token().await?;
+    if viewer["viewer"]["can_request_admin"] == true
+        && viewer["viewer"]["matrix"]["mxid"] == whoami.user_id
+        && !bound.is_admin
+    {
+        return Err(make_err("Pasion administrator authorization is not yet synchronized to Matrix. Please retry sign-in; check connector health if this persists.".into()));
+    }
     if let Some(device_id) = whoami.device_id.as_deref()
         && is_valid_device_id(device_id)
     {
@@ -401,7 +470,7 @@ pub async fn handle_oauth_callback(
         }
     }
 
-    Ok(())
+    Ok(false)
 }
 
 #[derive(Deserialize)]
@@ -409,6 +478,8 @@ struct TokenResponse {
     access_token: String,
     #[serde(default)]
     refresh_token: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 // ── OAuth2 token refresh ────────────────────────────────────────────────────
@@ -602,7 +673,31 @@ fn make_err(msg: String) -> HttpError {
 
 #[cfg(test)]
 mod tests {
-    use super::build_oauth_scope;
+    use super::{account_needs_admin_scope, build_oauth_scope};
+    #[test]
+    fn automatic_admin_authorization_is_bound_to_same_pasion_identity() {
+        let admin = serde_json::json!({"viewer":{"can_request_admin":true,"matrix":{"mxid":"@admin:server"}}});
+        assert!(account_needs_admin_scope(
+            &admin,
+            "@admin:server",
+            "urn:matrix:client:api:*"
+        ));
+        assert!(!account_needs_admin_scope(
+            &admin,
+            "@other:server",
+            "urn:matrix:client:api:*"
+        ));
+        assert!(!account_needs_admin_scope(
+            &admin,
+            "@admin:server",
+            "urn:pasion:admin urn:palpo:admin:*"
+        ));
+        assert!(!account_needs_admin_scope(
+            &serde_json::json!({"viewer":{"can_request_admin":false}}),
+            "@admin:server",
+            ""
+        ));
+    }
 
     #[test]
     fn members_do_not_request_administrative_scopes() {

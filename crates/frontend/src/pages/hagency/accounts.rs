@@ -5,6 +5,12 @@ use serde_json::{Value, json};
 
 #[component]
 pub fn Approvals() -> Element {
+    if storage::get_item("oauth_enabled").as_deref() == Some("true") {
+        return rsx! { div { class:"hg-page",h1 { "Account management" }
+            p { "Pasion manages registration, accounts and administrator roles for this server." }
+            Link { to:Route::PasionAccounts {},class:"hg-link","Open Account management" }
+        } };
+    }
     let mut resource = use_resource(|| async { get("/account-requests").await });
     use_future(move || async move {
         loop {
@@ -59,6 +65,11 @@ fn random_hex(len: usize) -> Result<String, String> {
 
 #[component]
 pub fn AccountRequest() -> Element {
+    if storage::get_item("oauth_enabled").as_deref() == Some("true") {
+        return rsx! { div { class:"hg-public hg-page",h1 { "Create a server account" }
+            a { href:"/_pasion/register",class:"hg-link","Register with Pasion" }
+        } };
+    }
     let availability = use_resource(|| async {
         hagency::public("/account-access", None)
             .await

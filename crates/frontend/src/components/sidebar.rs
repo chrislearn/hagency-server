@@ -160,17 +160,21 @@ fn build_sections(
                 icon: "link",
             },
             NavItem {
-                title: "Account approvals".into(),
-                route: Route::HagencyAccountApprovals {},
-                icon: "user-check",
-            },
-            NavItem {
                 title: "Hagency activity".into(),
                 route: Route::HagencyActivity {},
                 icon: "scroll-text",
             },
         ],
     });
+
+    if crate::utils::storage::get_item("legacy_account_approval_enabled").as_deref() == Some("true")
+    {
+        sections.last_mut().unwrap().items.push(NavItem {
+            title: "Account approvals".into(),
+            route: Route::HagencyAccountApprovals {},
+            icon: "user-check",
+        });
+    }
 
     // Dashboard (standalone)
     sections.push(NavSection {

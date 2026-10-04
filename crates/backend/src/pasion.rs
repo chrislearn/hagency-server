@@ -23,8 +23,11 @@ pub struct PasionConfig {
 struct EmbeddingConfig {
     #[serde(default = "default_resources")]
     resources_dir: PathBuf,
-    #[serde(default)]
+    #[serde(default = "default_delegate")]
     delegate_matrix_auth: bool,
+}
+fn default_delegate() -> bool {
+    true
 }
 fn default_resources() -> PathBuf {
     "../../resources/pasion".into()
@@ -158,12 +161,17 @@ pub async fn prepare(host: &mut Config) -> anyhow::Result<Option<Figment>> {
                     .to_string(),
             ),
             account_management_url: Some(public.join("settings")?.to_string()),
-            introspection_cache_ttl: 300,
+            // Pasion is the role authority: revocation must affect the next request.
+            introspection_cache_ttl: 0,
             ..Default::default()
         });
     }
     let root = conf.resources_dir;
     let mut settings = conf.settings;
+    if settings.get("account").is_none() {
+        settings["account"] = json!({});
+    }
+    settings["account"]["admin_portal_url"] = json!(host.public_origin);
     // The bundled SPA is a public PKCE client. Keep its callback aligned with
     // the host origin, without requiring a second deployment/configuration.
     let client = json!({
@@ -205,6 +213,234 @@ pub async fn prepare(host: &mut Config) -> anyhow::Result<Option<Figment>> {
     Ok(Some(figment))
 }
 
+/// Operator-only first administrator setup. Linking a pre-existing Matrix
+/// identity is explicit and restricted to an active human administrator.
+pub async fn bootstrap_admin(
+    figment: &Figment,
+    server_name: &str,
+    username: &str,
+    password_path: &Path,
+    link_existing: bool,
+) -> anyhow::Result<()> {
+    use pasion_data::{
+        PgRepositoryFactory, RepositoryAccess, RepositoryFactory, SystemClock,
+        queue::{ProvisionUserJob, QueueJobRepositoryExt},
+        user::UserFilter,
+    };
+    use zeroize::Zeroizing;
+
+    anyhow::ensure!(
+        pasion_backend::util::username_valid(username),
+        "invalid bootstrap username"
+    );
+    let user_id = palpo::core::OwnedUserId::try_from(format!("@{username}:{server_name}"))?;
+    user_id.validate_strict()?;
+    let existing = palpo::data::user::user_exists(&user_id).await?;
+    if existing {
+        let user = palpo::data::user::get_user(&user_id).await?;
+        anyhow::ensure!(
+            link_existing
+                && user.is_admin
+                && !user.is_guest
+                && user.appservice_id.is_none()
+                && user.deactivated_at.is_none()
+                && user.suspended_at.is_none(),
+            "existing Matrix identity must be an active human administrator; explicitly use --link-existing-matrix-admin"
+        );
+    } else {
+        anyhow::ensure!(!link_existing, "no existing Matrix administrator to link");
+    }
+    let config = AppConfig::extract(figment).map_err(anyhow::Error::from_boxed)?;
+    let manager = pasion_backend::util::password_manager_from_config(&config.passwords).await?;
+    let password = Zeroizing::new(
+        std::fs::read_to_string(password_path)?
+            .trim_end_matches(['\r', '\n'])
+            .to_owned(),
+    );
+    anyhow::ensure!(
+        password.len() >= 12 && manager.is_password_complex_enough(&password)?,
+        "bootstrap password does not meet Pasion password policy"
+    );
+    let mut rng = rand_chacha::ChaChaRng::from_entropy();
+    let (version, hash) = manager.hash(&mut rng, password).await?;
+    let pool = pasion_backend::util::diesel_pool_from_config(&config.database).await?;
+    let mut repo = PgRepositoryFactory::new(pool).create().await?;
+    repo.user().acquire_bootstrap_admin_lock().await?;
+    anyhow::ensure!(
+        repo.user()
+            .count(UserFilter::new().can_request_admin_only())
+            .await?
+            == 0,
+        "Pasion already has an administrator; use its account management to grant roles"
+    );
+    anyhow::ensure!(
+        !repo.user().exists(username).await?,
+        "Pasion account already exists; bootstrap refuses to overwrite it"
+    );
+    let clock = SystemClock::default();
+    let user = repo
+        .user()
+        .add(&mut rng, &clock, username.to_owned())
+        .await?;
+    let user = repo.user().set_can_request_admin(user, true).await?;
+    repo.user_password()
+        .add(&mut rng, &clock, &user, version, hash, None)
+        .await?;
+    repo.queue_job()
+        .schedule_job(&mut rng, &clock, ProvisionUserJob::new(&user))
+        .await?;
+    repo.save().await?;
+    // The durable Pasion provisioning job mirrors this role after the listener
+    // starts, and retries on failure. Never change Matrix before Pasion commits.
+    tracing::info!(user=%user_id, "Pasion administrator created; Matrix role synchronization queued");
+    Ok(())
+}
+
+/// The embedded Palpo version checks its Matrix role but does not enforce
+/// OAuth admin scopes. This boundary requires Pasion's current authorization
+/// on every Palpo admin call, including internal Hagency adapter calls.
+#[derive(Clone)]
+pub struct DelegatedAdminGuard {
+    endpoint: url::Url,
+    secret: String,
+    client: reqwest::Client,
+}
+impl DelegatedAdminGuard {
+    pub fn new(host: &Config) -> anyhow::Result<Self> {
+        Ok(Self {
+            endpoint: host.internal_origin().join("_pasion/oauth2/introspect")?,
+            secret: host
+                .matrix
+                .admin
+                .mas_secret
+                .clone()
+                .context("missing Pasion shared secret")?,
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()?,
+        })
+    }
+}
+pub fn allows_palpo_admin(value: &Value) -> bool {
+    value["active"] == true
+        && value["scope"]
+            .as_str()
+            .is_some_and(|scope| scope.split_whitespace().any(|s| s == "urn:palpo:admin:*"))
+}
+#[salvo::async_trait]
+impl salvo::Handler for DelegatedAdminGuard {
+    async fn handle(
+        &self,
+        req: &mut salvo::Request,
+        _: &mut salvo::Depot,
+        res: &mut salvo::Response,
+        ctrl: &mut salvo::FlowCtrl,
+    ) {
+        let path = req.uri().path();
+        if !["/_palpo/admin", "/_synapse/admin"]
+            .iter()
+            .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
+        {
+            return;
+        }
+        let token = match req.headers().get("authorization") {
+            Some(header) => header
+                .to_str()
+                .ok()
+                .and_then(|s| s.split_once(' '))
+                .filter(|(scheme, token)| {
+                    scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()
+                })
+                .map(|(_, token)| token.to_owned()),
+            None => req.query::<String>("access_token"),
+        };
+        let result = if let Some(token) = token {
+            match self
+                .client
+                .post(self.endpoint.clone())
+                .bearer_auth(&self.secret)
+                .form(&[("token", token)])
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    response.json::<Value>().await.ok()
+                }
+                _ => None,
+            }
+        } else {
+            Some(json!({"active":false}))
+        };
+        let (status, code, message) = match result {
+            Some(value) if allows_palpo_admin(&value) => {
+                // Human credentials and account creation must not bypass the
+                // identity provider through the copied Matrix admin screens.
+                let user_write =
+                    regex::Regex::new(r"^/(?:_palpo|_synapse)/admin/v2/users/([^/]+)$").unwrap();
+                let path = req.uri().path().to_owned();
+                let password_reset = req.method() == salvo::http::Method::POST
+                    && path.contains("/admin/v1/reset_password/");
+                let blocked = if let Some(captures) = user_write
+                    .captures(&path)
+                    .filter(|_| req.method() == salvo::http::Method::PUT)
+                {
+                    match req.parse_json::<Value>().await {
+                        Ok(input) => {
+                            let user = percent_encoding::percent_decode_str(&captures[1])
+                                .decode_utf8()
+                                .ok()
+                                .and_then(|id| {
+                                    palpo::core::OwnedUserId::try_from(id.as_ref()).ok()
+                                });
+                            match user {
+                                Some(user) => {
+                                    !input["password"].is_null()
+                                        || !palpo::data::user::user_exists(&user)
+                                            .await
+                                            .unwrap_or(false)
+                                }
+                                None => true,
+                            }
+                        }
+                        Err(_) => true,
+                    }
+                } else {
+                    password_reset
+                };
+                if blocked {
+                    (
+                        salvo::http::StatusCode::FORBIDDEN,
+                        "M_FORBIDDEN",
+                        "Manage accounts and passwords through Pasion Account management.",
+                    )
+                } else {
+                    return;
+                }
+            }
+            Some(value) if value["active"] == true => (
+                salvo::http::StatusCode::FORBIDDEN,
+                "M_FORBIDDEN",
+                "Pasion administrator authorization is required.",
+            ),
+            Some(_) => (
+                salvo::http::StatusCode::UNAUTHORIZED,
+                "M_UNKNOWN_TOKEN",
+                "A valid Pasion access token is required.",
+            ),
+            None => (
+                salvo::http::StatusCode::BAD_GATEWAY,
+                "M_UNKNOWN",
+                "Authentication service is unavailable.",
+            ),
+        };
+        res.status_code(status);
+        res.render(salvo::writing::Json(
+            json!({"errcode":code,"error":message}),
+        ));
+        ctrl.skip_rest();
+    }
+}
+
 fn write_private_once(path: &Path, value: &Value) -> anyhow::Result<()> {
     use std::io::Write;
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
@@ -228,4 +464,26 @@ fn write_private_once(path: &Path, value: &Value) -> anyhow::Result<()> {
     })();
     let _ = std::fs::remove_file(tmp);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn delegated_administration_requires_live_exact_scope() {
+        assert!(allows_palpo_admin(
+            &json!({"active":true,"scope":"urn:matrix:client:api:* urn:palpo:admin:* urn:pasion:admin"})
+        ));
+        for scope in [
+            "urn:matrix:client:api:*",
+            "urn:pasion:admin",
+            "urn:palpo:admin:users",
+            "urn:palpo:admin:*suffix",
+        ] {
+            assert!(!allows_palpo_admin(&json!({"active":true,"scope":scope})));
+        }
+        assert!(!allows_palpo_admin(
+            &json!({"active":false,"scope":"urn:palpo:admin:*"})
+        ));
+    }
 }

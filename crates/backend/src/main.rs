@@ -25,6 +25,9 @@ struct Args {
     bootstrap_admin: Option<String>,
     #[arg(long, requires = "bootstrap_admin")]
     bootstrap_password_file: Option<PathBuf>,
+    /// Explicitly link the first Pasion administrator to an existing Matrix administrator.
+    #[arg(long, requires = "bootstrap_admin")]
+    link_existing_matrix_admin: bool,
 }
 fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -62,9 +65,9 @@ async fn run() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("Rustls crypto provider was already initialized"))?;
     conf.prepare_signing_key()?;
     let pasion_config = hagency_server::pasion::prepare(&mut conf).await?;
-    let pasion = match pasion_config {
+    let pasion = match &pasion_config {
         Some(figment) => {
-            Some(hagency_server::PasionServer::initialize(&figment, Default::default()).await?)
+            Some(hagency_server::PasionServer::initialize(figment, Default::default()).await?)
         }
         None => None,
     };
@@ -72,28 +75,39 @@ async fn run() -> anyhow::Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     if let Some(localpart) = &args.bootstrap_admin {
-        anyhow::ensure!(
-            !conf.pasion.as_ref().is_some_and(|p| p.delegate_matrix_auth),
-            "native bootstrap cannot be used with delegated auth; prepare a Pasion account instead"
-        );
-        let user = palpo::core::OwnedUserId::try_from(format!(
-            "@{localpart}:{}",
-            conf.matrix.server_name
-        ))?;
-        anyhow::ensure!(user.validate_strict().is_ok(), "invalid bootstrap username");
-        anyhow::ensure!(
-            !palpo::data::user::user_exists(&user).await?,
-            "bootstrap refuses to modify an existing user"
-        );
-        let password = std::fs::read_to_string(args.bootstrap_password_file.as_ref().unwrap())?;
-        let password = password.trim_end_matches(['\r', '\n']);
-        anyhow::ensure!(
-            password.len() >= 12,
-            "bootstrap password must be at least 12 characters"
-        );
-        palpo::user::create_user(&user, Some(password)).await?;
-        palpo::user::make_user_admin(&user).await?;
-        tracing::info!(user=%user,"bootstrap administrator created");
+        if conf.pasion.as_ref().is_some_and(|p| p.delegate_matrix_auth) {
+            hagency_server::pasion::bootstrap_admin(
+                pasion_config.as_ref().unwrap(),
+                conf.matrix.server_name.as_str(),
+                localpart,
+                args.bootstrap_password_file.as_ref().unwrap(),
+                args.link_existing_matrix_admin,
+            )
+            .await?;
+        } else {
+            anyhow::ensure!(
+                !args.link_existing_matrix_admin,
+                "linking an existing administrator requires Pasion delegated authentication"
+            );
+            let user = palpo::core::OwnedUserId::try_from(format!(
+                "@{localpart}:{}",
+                conf.matrix.server_name
+            ))?;
+            anyhow::ensure!(user.validate_strict().is_ok(), "invalid bootstrap username");
+            anyhow::ensure!(
+                !palpo::data::user::user_exists(&user).await?,
+                "bootstrap refuses to modify an existing user"
+            );
+            let password = std::fs::read_to_string(args.bootstrap_password_file.as_ref().unwrap())?;
+            let password = password.trim_end_matches(['\r', '\n']);
+            anyhow::ensure!(
+                password.len() >= 12,
+                "bootstrap password must be at least 12 characters"
+            );
+            palpo::user::create_user(&user, Some(password)).await?;
+            palpo::user::make_user_admin(&user).await?;
+            tracing::info!(user=%user,"bootstrap administrator created");
+        }
     }
     let store = Arc::new(Store::postgres(&conf.database_url).await?);
     let admin = Admin::new(&conf, store).await?;
@@ -101,9 +115,15 @@ async fn run() -> anyhow::Result<()> {
         .account_config
         .as_ref()
         .map(|_| admin.start_account_worker());
+    let mut matrix_router = Router::new();
+    if conf.pasion.as_ref().is_some_and(|p| p.delegate_matrix_auth) {
+        matrix_router =
+            matrix_router.hoop(hagency_server::pasion::DelegatedAdminGuard::new(&conf)?);
+    }
+    matrix_router = matrix_router.push(matrix.router());
     let mut router = admin
         .router()
-        .push(matrix.router())
+        .push(matrix_router)
         .push(Router::with_path("healthz").get(health))
         .push(Frontend::new(&conf).router());
     if let Some(pasion) = &pasion {

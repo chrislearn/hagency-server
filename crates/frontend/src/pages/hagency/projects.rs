@@ -33,6 +33,7 @@ pub fn Projects() -> Element {
     rsx! { div { class: "hg-page",
         Heading { title: "Projects", description: "Create a project room or register an existing room you own. Agent allocations are approved by the Hagency owner.", resource }
         Message { notice } Status { resource }
+        RenewalWarnings { fleets: rows(&loaded,"fleets") }
         form { class: "hg-card hg-form", onsubmit: move |event| {
             event.prevent_default(); if busy() { return; }
             let body = json!({"requestId":operation(),"fleetId":provider(),"name":name(),"roomId":room()});

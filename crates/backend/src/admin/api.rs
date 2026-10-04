@@ -22,6 +22,7 @@ pub struct Admin {
     pub(crate) mutations: Arc<Mutex<()>>,
     session_ttl: i64,
     read_timeout: Duration,
+    oauth_revocation: Option<(Url, String)>,
 }
 #[derive(Clone)]
 struct Session {
@@ -63,6 +64,18 @@ impl Admin {
             mutations: Default::default(),
             session_ttl: conf.session_ttl_ms.unwrap_or(1800000) as i64,
             read_timeout: Duration::from_millis(conf.read_timeout_ms.unwrap_or(8000)),
+            oauth_revocation: if conf.pasion.as_ref().is_some_and(|p| p.delegate_matrix_auth) {
+                Some((
+                    conf.internal_origin().join("_pasion/oauth2/revoke")?,
+                    conf.matrix
+                        .admin
+                        .mas_secret
+                        .clone()
+                        .ok_or_else(|| anyhow::anyhow!("missing Pasion shared secret"))?,
+                ))
+            } else {
+                None
+            },
         };
         let binding = json!({"serverName":this.server_name,"palpoOrigin":this.palpo.url.origin().ascii_serialization()});
         this.store
@@ -121,13 +134,10 @@ impl Admin {
         token: String,
         user: String,
         is_admin: bool,
-    ) -> Value {
+    ) -> Result<Value> {
         let id = secret();
         let csrf = secret();
-        let mut sessions = self.sessions.lock().await;
-        sessions.retain(|_, s| s.expires > millis());
-        // Replace the cookie session instead of leaving a previous identity active.
-        if let Some(previous) = req
+        let previous = req
             .headers()
             .get(header::COOKIE)
             .and_then(|v| v.to_str().ok())
@@ -135,8 +145,46 @@ impl Admin {
                 cookies
                     .split(';')
                     .find_map(|p| p.trim().strip_prefix("palpo_admin="))
-            })
+            });
+        let old = if let Some(previous) = previous {
+            self.sessions.lock().await.get(previous).cloned()
+        } else {
+            None
+        };
+        if let (Some((endpoint, shared_secret)), Some(old)) = (&self.oauth_revocation, old)
+            && old.token != token
         {
+            // Revoke only after the replacement token is fully verified. Calling
+            // Matrix logout here would delete a device shared by both grants.
+            let revoked = reqwest::Client::new()
+                .post(endpoint.clone())
+                .timeout(Duration::from_secs(10))
+                .bearer_auth(shared_secret)
+                .form(&[
+                    ("token", old.token),
+                    ("token_type_hint", "access_token".into()),
+                ])
+                .send()
+                .await
+                .map_err(|_| {
+                    err(
+                        502,
+                        "authorization_handover_failed",
+                        "Could not replace your previous authorization. Retry sign-in.",
+                    )
+                })?;
+            if !revoked.status().is_success() {
+                return Err(err(
+                    502,
+                    "authorization_handover_failed",
+                    "Could not replace your previous authorization. Retry sign-in.",
+                ));
+            }
+        }
+        let mut sessions = self.sessions.lock().await;
+        sessions.retain(|_, s| s.expires > millis());
+        // Replace the cookie session instead of leaving a previous identity active.
+        if let Some(previous) = previous {
             sessions.remove(previous);
         }
         sessions.insert(
@@ -152,8 +200,10 @@ impl Admin {
         drop(sessions);
         res.add_header(header::SET_COOKIE, self.cookie(&id, false), true)
             .unwrap();
-        json!({"userId":user,"csrf":csrf,"isAdmin":is_admin,"serverName":self.server_name,
-            "callbackOrigins":if is_admin { self.callback_origins.clone() } else { vec![] },"outboundAvailable":true})
+        Ok(
+            json!({"userId":user,"csrf":csrf,"isAdmin":is_admin,"serverName":self.server_name,
+            "callbackOrigins":if is_admin { self.callback_origins.clone() } else { vec![] },"outboundAvailable":true}),
+        )
     }
     async fn body(req: &mut Request, limit: usize) -> Result<Value> {
         if req
@@ -378,7 +428,8 @@ impl Admin {
             };
             return Ok((
                 200,
-                self.browser_session(req, res, bearer, user, is_admin).await,
+                self.browser_session(req, res, bearer, user, is_admin)
+                    .await?,
             ));
         }
         if path == "/api/login" && method == "POST" {
@@ -422,7 +473,8 @@ impl Admin {
             self.rates.lock().await.remove(&format!("login:{address}"));
             return Ok((
                 200,
-                self.browser_session(req, res, token, user, is_admin).await,
+                self.browser_session(req, res, token, user, is_admin)
+                    .await?,
             ));
         }
         if let Some(pair) = pair

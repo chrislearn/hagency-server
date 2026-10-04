@@ -63,6 +63,7 @@ pub fn RequestAgent() -> Element {
     rsx! { div { class: "hg-page",
         Heading { title: "Request an agent", description: "Choose a project, then a published resource and role. The Hagency owner reviews the requested allocation.", resource }
         Message { notice } Status { resource }
+        RenewalWarnings { fleets:rows(&loaded,"fleets") }
         if fleet["transport"]["mode"] == "outbound" && fleet["transport"]["online"] == false && provider_ready {
             p { class: "hg-notice", "This Hagency is offline. Requests use its last published resources and will be queued until it reconnects. Its owner still needs to approve the allocation." }
         }
@@ -101,7 +102,7 @@ pub fn RequestAgent() -> Element {
             label { class: "hg-field", "Agent name" input { class: "hg-input", required: true, maxlength: 64, value: name(), placeholder: "Edison or 小白", oninput: move |e|name.set(e.value()) } }
             label { class: "hg-field", "Total token allowance" input { class: "hg-input", r#type: "number", min: 1, step: 1, required: true, value: tokens(), oninput: move |e|tokens.set(e.value()) } }
             label { class: "hg-field", "Daily token allowance" input { class: "hg-input", r#type: "number", min: 1, step: 1, required: true, value: per_day(), oninput: move |e|per_day.set(e.value()) } }
-            if !usable { p { class: "hg-note hg-wide", "Select a ready project, an available resource and its role. If the provider is offline, its owner needs to verify the connection first." } }
+            if !usable { p { class: "hg-note hg-wide", "Select a ready project, an available resource and its role. If connection verification is missing or expired, ask the provider owner to verify it in My Hagencys. An established outbound provider can queue requests while offline." } }
             details { class: "hg-wide", summary { "Operation reference" } code { "{operation()}" } }
             button { class: "hg-button", r#type: "submit", disabled: busy() || !usable, if busy() { "Submitting…" } else { "Send agent request" } }
         }
@@ -109,6 +110,10 @@ pub fn RequestAgent() -> Element {
             for offer in offers { article { class: "hg-card",
                 h2 { {text(&offer,"name")} }
                 Facts { rows: vec![("Model".into(),text(&offer,"model")),("Framework".into(),text(&offer,"framework")),("Reasoning".into(),text(&offer,"reasoning")),("Roles".into(),text(&offer,"roles"))] }
+                button { class:"hg-button hg-secondary",r#type:"button",onclick:move|_| {
+                    resource_id.set(text(&offer,"id"));
+                    role.set(offer["roles"].as_array().and_then(|r|r.first()).and_then(Value::as_str).unwrap_or_default().into());
+                },"Define Agent on this resource" }
             } }
         } }
     } }
@@ -135,23 +140,31 @@ pub fn Requests() -> Element {
         Heading { title: "Agent requests", description: "Follow delivery, owner approval and actual agent availability for your projects.", resource }
         Message { notice } Status { resource }
         Link { to: Route::HagencyRequestAgent {}, class: "hg-link", "Request an agent" }
-        for (label,states) in [
-            ("Needs attention",vec!["submission_pending","sending"]),
-            ("Awaiting delivery or approval",vec!["queued","pending","review_pending"]),
-            ("Preparing or available",vec!["accepted","approved","active","ready","admitted"]),
-            ("Ended",vec!["ended","rejected","retired","expired"]),
-            ("Other states",vec![]),
-        ] {
+        if requests.iter().any(|r|r["lastError"]["code"]=="outbound_status_stale") {
+            p { class:"hg-notice", "Some requests have not received a recent status from Hagency. They are not usable until current status and room membership are verified." }
+        }
+        for (index,label) in ["Needs attention","Waiting for agent to join","In review","Ready to use","Ended"].into_iter().enumerate() {
             {
-                let all = ["submission_pending","sending","queued","pending","review_pending","accepted","approved","active","ready","admitted","ended","rejected","retired","expired"];
-                let group: Vec<_> = requests.iter().filter(|r| if states.is_empty() { !all.contains(&text(r,"state").as_str()) } else { states.contains(&text(r,"state").as_str()) }).cloned().collect();
+                let group: Vec<_> = requests.iter().rev().filter(|r|request_group(r)==index).cloned().collect();
                 rsx! { if !group.is_empty() { section { class: "hg-stack",
                     h2 { "{label}" }
                     for request in group {
                         article { class: "hg-card",
-                            h3 { {text(&request["agentDefinition"],"name")} }
+                            h3 { {if request["agentDefinition"]["name"].is_string() { text(&request["agentDefinition"],"name") } else { text(&request,"role") }} }
                             span { class: "hg-badge", {text(&request,"state")} }
                             Facts { rows: vec![("Project".into(),text(&request,"projectId")),("Role".into(),text(&request,"role")),("Token allowance".into(),text(&request,"requestedTokens")),("Daily allowance".into(),text(&request,"ratePerDay")),("Request".into(),text(&request,"requestId")),("Agent".into(),text(&request["provider"],"agentMxid")),("Model".into(),text(&request["resource"],"model"))] }
+                            if request["provider"]["serving"]["model"].is_string() {
+                                Facts { rows:vec![("Running framework".into(),text(&request["provider"]["serving"],"framework")),("Running model".into(),text(&request["provider"]["serving"],"model")),("Reasoning".into(),text(&request["provider"]["serving"],"reasoning")),("Tier".into(),text(&request["provider"]["serving"],"tier"))] }
+                            }
+                            if request["provider"]["fulfillment"]["phase"].is_string() && request["provider"]["fulfillment"]["phase"] != "complete" {
+                                p { class:"hg-note",{format!("Preparation: {}",text(&request["provider"]["fulfillment"],"phase"))} }
+                            }
+                            if request["provider"]["fulfillment"]["error"].is_string() {
+                                p { class:"hg-notice hg-error",{text(&request["provider"]["fulfillment"],"error")} }
+                            }
+                            if request["state"]=="queued" { p { class:"hg-note","Stored on this server. Waiting for Hagency delivery and its owner's allocation decision." } }
+                            if request["state"]=="pending" { p { class:"hg-note","Waiting for the Hagency owner's resource decision." } }
+                            if request["state"]=="submission_pending" { p { class:"hg-notice","The request has not been delivered yet. Retry uses the same request reference." } }
                             if request["usable"] == true { RoomLink { room: text(&request,"targetRoomId"), label: "Open project and use agent" } }
                             if !request["lastError"].is_null() { p { class: "hg-note", {text(&request["lastError"],"code")} } }
                             if request["state"] == "submission_pending" {

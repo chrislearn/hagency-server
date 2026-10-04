@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 use serde_json::Value;
 use wasm_bindgen::JsCast;
 
-thread_local! { static RENEWAL: std::cell::RefCell<std::collections::HashMap<String,f64>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
+thread_local! { static RENEWAL: std::cell::RefCell<std::collections::HashMap<String,(f64,Option<String>)>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
 
 pub type Data = Resource<Result<Value, String>>;
 pub type Notice = Signal<Option<(bool, String)>>;
@@ -62,20 +62,25 @@ pub async fn get(path: &str) -> Result<Value, String> {
                 let now = js_sys::Date::now();
                 let retry = RENEWAL.with(|map| {
                     let mut map = map.borrow_mut();
-                    if map.get(&id).is_some_and(|t| now - t < 60000.0) {
+                    if map.get(&id).is_some_and(|(t, _)| now - t < 60000.0) {
                         false
                     } else {
-                        map.insert(id.clone(), now);
+                        map.entry(id.clone()).or_insert((now, None)).0 = now;
                         true
                     }
                 });
                 if retry {
-                    let _ = hagency::call(
+                    let result = hagency::call(
                         &format!("/my/fleets/{id}/connect"),
                         "POST",
                         Some(serde_json::json!({})),
                     )
                     .await;
+                    RENEWAL.with(|map| {
+                        if let Some(entry) = map.borrow_mut().get_mut(&id) {
+                            entry.1 = result.err().map(|e| e.message);
+                        }
+                    });
                     value = hagency::call(path, "GET", None)
                         .await
                         .map_err(|e| e.message)?;
@@ -83,7 +88,42 @@ pub async fn get(path: &str) -> Result<Value, String> {
             }
         }
     }
+    if let Some(fleets) = value["fleets"].as_array_mut() {
+        for fleet in fleets {
+            let id = text(fleet, "id");
+            if let Some(error) =
+                RENEWAL.with(|map| map.borrow().get(&id).and_then(|(_, e)| e.clone()))
+            {
+                fleet["renewalError"] = serde_json::json!(error);
+                fleet["readiness"]["ready"] = serde_json::json!(false);
+                fleet["capabilityRead"]["state"] = serde_json::json!("failed");
+            }
+        }
+    }
     Ok(value)
+}
+pub fn reset_renewal() {
+    RENEWAL.with(|map| map.borrow_mut().clear());
+}
+
+#[component]
+pub fn RenewalWarnings(fleets: Vec<Value>) -> Element {
+    rsx! { for fleet in fleets.iter().filter(|f| f["renewalError"].is_string()) {
+        div { class:"hg-notice hg-error",role:"status",
+            {format!("Could not renew {}: {}. Automatic retry waits at least one minute while this page is visible.",text(fleet,"name"),text(fleet,"renewalError"))}
+            dioxus::prelude::Link { to:crate::router::Route::HagencyOwned {},class:"hg-link","Verify connection in My Hagencys" }
+        }
+    } }
+}
+
+pub fn request_group(request: &Value) -> usize {
+    match text(request, "state").as_str() {
+        "submission_pending" | "failed" | "rejected" => 0,
+        "active" if request["usable"] != true => 1,
+        "pending" | "queued" => 2,
+        _ if request["usable"] == true => 3,
+        _ => 4,
+    }
 }
 pub fn saved_operation(kind: &str) -> String {
     let key = format!(
@@ -217,6 +257,19 @@ pub fn download(value: &Value, filename: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn active_but_unusable_requests_never_appear_in_ready_group() {
+        assert_eq!(
+            request_group(&serde_json::json!({"state":"active","usable":false})),
+            1
+        );
+        assert_eq!(
+            request_group(&serde_json::json!({"state":"active","usable":true})),
+            3
+        );
+        assert_eq!(request_group(&serde_json::json!({"state":"rejected"})), 0);
+        assert_eq!(request_group(&serde_json::json!({"state":"queued"})), 2);
+    }
     #[test]
     fn resources_merge_their_published_roles() {
         let fleet = serde_json::json!({"capabilities":{"offers":[

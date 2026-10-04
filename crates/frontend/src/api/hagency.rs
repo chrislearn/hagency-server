@@ -19,6 +19,7 @@ pub struct Session {
 thread_local! { static SESSION: RefCell<Option<Session>> = const { RefCell::new(None) }; }
 
 pub fn clear_session() {
+    crate::pages::hagency::common::reset_renewal();
     SESSION.with(|v| *v.borrow_mut() = None);
 }
 

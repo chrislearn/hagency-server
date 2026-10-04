@@ -333,6 +333,13 @@ fn UserList() -> Element {
 
 #[component]
 fn UserCreate() -> Element {
+    if crate::utils::storage::get_item("oauth_enabled").as_deref() == Some("true") {
+        return rsx! { div { class:"hg-page",
+            h1 { "Create a server account" }
+            p { "Pasion manages accounts, passwords and administrator roles for this server." }
+            Link { to:Route::PasionAccounts {},class:"hg-link","Create an account in Account management" }
+        } };
+    }
     rsx! {
         pages::users::create::UserCreate {}
     }

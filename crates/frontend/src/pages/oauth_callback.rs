@@ -42,10 +42,14 @@ pub fn OAuthCallback(
 
             // Step 1: Exchange code for tokens (validates `state` against the
             // value stashed in sessionStorage by start_oauth_login).
-            if let Err(e) = auth::handle_oauth_callback(&code, state.as_deref()).await {
-                processing.set(false);
-                error_msg.set(Some(e.message));
-                return;
+            match auth::handle_oauth_callback(&code, state.as_deref()).await {
+                Ok(true) => return, // Same Pasion login, now authorizing its administrator role.
+                Ok(false) => {}
+                Err(e) => {
+                    processing.set(false);
+                    error_msg.set(Some(e.message));
+                    return;
+                }
             }
 
             // Step 2: Forget any verdict from a previous login in this tab;

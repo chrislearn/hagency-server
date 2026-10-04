@@ -294,3 +294,57 @@ configuration and mounted Matrix/Pasion APIs, UID 10001, mode-0600 config/key
 files, graceful restart and persistent Matrix/Pasion signing keys. Its temporary
 containers and volumes were removed. The local development server remains at
 `http://127.0.0.1:8088/`, with Pasion account UI at `/_pasion/`.
+
+## Unified Pasion authority and web-admin workflow completion (2026-10-04)
+
+This section supersedes the previous separate-role/default-native-auth notes.
+Generated profiles now enable Pasion delegation. Pasion owns human passwords,
+registration and administrator roles; its provisioning queue synchronizes Matrix
+identities and roles. The console exposes one Pasion sign-in entry. The workflow
+comparison and intentional legacy approval boundary are recorded in
+`docs/WEB_ADMIN_PARITY.md`.
+
+Executed checks:
+
+- Backend formatting and strict all-target Clippy passed; seven unit/config
+  tests passed. The optional dedicated PostgreSQL lock test remains opt-in.
+- Twelve native frontend tests and the release Dioxus/WASM build passed,
+  including identity-bound administrator authorization and the regression where
+  an active but unusable request must not appear in Ready to use.
+- All eleven controlled HTTP contract groups passed, retaining callback/outbound
+  pairing, grants, proofs, durable delivery, project/request and compatibility
+  account approval behavior.
+- Real Pasion integration used three fresh isolated databases. It exercised
+  first administrator bootstrap, actual Authorization Code + PKCE and consent,
+  member-only scope denial even for an administrator, human creation/password
+  bypass rejection, Matrix profile updates, Pasion grant/revoke synchronization,
+  immediate denial through both Matrix APIs and an existing Hagency cookie, and
+  stable signing keys after restart. Tests also confirmed that authorization
+  handover revokes the preliminary grant while preserving the replacement's
+  Matrix device and access token. Temporary databases were removed afterwards.
+- Separate fresh browser sessions completed administrator and member sign-in.
+  The administrator needed no second password prompt during scope elevation,
+  opened Dashboard, Hagency connections and Pasion Accounts, and saw callback
+  transport disabled when no origins are allowed. The member reached Projects
+  with service-only navigation. Both sessions had no uncaught JavaScript errors.
+- The final Linux arm64 image passed isolated Compose smoke verification:
+  three component databases, Pasion administrator bootstrap and real OAuth
+  login, non-root process, protected configs/keys, hosted JS/WASM and SPA paths,
+  discovery, Matrix APIs, restart and persistent Matrix/Pasion keys. Health
+  readiness precedes asynchronous user provisioning, so this test waits for the
+  administrator's Matrix record before exercising authorization. Its temporary
+  containers and volumes were removed.
+- `just check-tools` passed formatting, strict Clippy and all five tests.
+
+The local development databases were privately backed up before switching auth.
+The existing `@admin:localhost:8088` identity was explicitly linked to the first
+Pasion administrator, retaining its Matrix ID and the existing password file;
+its Pasion login passed. The existing Pasion member account was retained. Private
+configuration, backups and credentials remain ignored by Git. Normal startup
+uses `just dev`, without bootstrap flags.
+
+The legacy pre-registration Matrix-room approval policy is retained only for
+explicit native-auth compatibility. Unified deployments use Pasion registration
+and account management; that optional legacy policy has not been reimplemented
+inside Pasion. Full-page reloads still require sign-in because frontend bearer
+and refresh tokens remain in memory.

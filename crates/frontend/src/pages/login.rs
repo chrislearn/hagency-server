@@ -21,6 +21,14 @@ pub fn LoginPage() -> Element {
             "pasion_enabled",
             if cfg.pasion_enabled { "true" } else { "false" },
         );
+        storage::set_item(
+            "legacy_account_approval_enabled",
+            if cfg.legacy_account_approval_enabled {
+                "true"
+            } else {
+                "false"
+            },
+        );
         cfg
     });
     let account_access =
@@ -44,16 +52,10 @@ pub fn LoginPage() -> Element {
                 p { "Sign in through Pasion using your server account." }
                 button { class:"hg-button",disabled:busy() || !ready,onclick:move|_| {
                     busy.set(true);notice.set(None);spawn(async move {
-                        if let Err(e)=auth::start_oauth_login(false).await { notice.set(Some((true,e.message))); }
+                        if let Err(e)=auth::start_login().await { notice.set(Some((true,e.message))); }
                         busy.set(false);
                     });
                 },"Sign in with Pasion" }
-                button { class:"hg-button hg-secondary",disabled:busy() || !ready,onclick:move|_| {
-                    busy.set(true);notice.set(None);spawn(async move {
-                        if let Err(e)=auth::start_oauth_login(true).await {notice.set(Some((true,e.message)));}
-                        busy.set(false);
-                    });
-                },"Sign in as administrator" }
             }
         } else {
             form { class:"hg-card hg-stack",onsubmit:move|event| {

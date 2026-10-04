@@ -101,28 +101,34 @@ administration uses the mounted Palpo APIs directly.
 
 ## Unified frontend authentication
 
-The host publishes nonsecret runtime settings at `/config.json`. With
-`[hagency].delegate_matrix_auth = false` in Pasion's config, the frontend signs
-in through Palpo's native Matrix password login. With delegation enabled, it
-uses Pasion OAuth Authorization Code + PKCE instead. Member login requests
-Matrix client/device scopes; the separate administrator login also requests
-Palpo/Pasion administrative scopes, which Pasion grants only to administrators.
-The host provisions the reserved public frontend OAuth client and derives its `/oauth/callback` URL;
-no client secret or separate frontend configuration is required.
+Pasion is the default identity provider. The host publishes nonsecret runtime
+settings at `/config.json`; the integrated frontend has one **Sign in with
+Pasion** entry point and uses Authorization Code + PKCE. It reads the signed-in
+Pasion account's role and requests administrative scopes only for an
+administrator. A fresh administrator login first establishes identity, then
+continues authorization for the same Pasion account. Members never receive
+administrative scopes.
 
-Both modes exchange the resulting Matrix token at `POST /api/login/token`.
-The backend validates `whoami` and the live Matrix administrator permission
-before issuing its HttpOnly cookie and CSRF token. Ordinary members see projects,
-Agent requests and their own Hagencys; Matrix administrators also see Padmin and
-Hagency administration. Pasion administration additionally requires a Pasion
-OAuth token, administrative scope and Pasion administrator permission, checked
-by Pasion's own endpoints. Pasion's administrator flag and Palpo's Matrix
-administrator flag remain separate: a full server administrator needs both;
-this frontend migration does not promote accounts automatically.
-In native authentication mode, the Pasion account center remains separately
-available at `/_pasion/`; its registration passwords are validated by Pasion and
-do not enable Palpo native password login. Account approval requests are offered
-only when configured.
+Pasion owns passwords, registration, account status and administrator roles.
+Its provisioning worker synchronizes the corresponding Matrix identities and
+administrator flags to Palpo. Manage people at `/pasion/accounts`; `/users`
+shows their Matrix records and service identities. Password changes and human
+account creation use Pasion. Hagency stores business permissions and project,
+provider and request state, without another password/account database.
+
+The host provisions the reserved public OAuth client and derives its
+`/oauth/callback` URL; no client secret or separate frontend deployment is needed.
+The resulting token is verified at `POST /api/login/token` before issuing an
+HttpOnly session cookie and CSRF token. Palpo administration additionally checks
+Pasion's live introspection and the exact `urn:palpo:admin:*` scope at the host
+boundary; a member-only token is insufficient even for an administrator account.
+Introspection caching is disabled so role/token revocation affects the next
+request. Pasion's own admin endpoints enforce their scope and current role.
+
+Explicit compatibility mode remains available with
+`[hagency].delegate_matrix_auth = false` in Pasion's config. Only that mode uses
+Palpo native password login and the original web-admin Matrix account-approval
+workflow. It is not the default unified deployment.
 
 Frontend source provenance and AGPL licensing are recorded in `NOTICE` and
 `crates/frontend/LICENSE` (Padmin commit `83d4567470ada808b89914aa0c786cdc3a7ac89a`).
@@ -191,10 +197,29 @@ just run --config config/dev/hagency.toml --bootstrap-admin admin \
   --bootstrap-password-file secrets/admin-password
 ```
 
-Bootstrap refuses to modify an existing account. Use the full Matrix ID
-`@admin:localhost:8088` to sign in. Stop a running development process before
-using bootstrap; there must be one server process per database. Subsequent
-starts omit the bootstrap options.
+With the default Pasion delegation, bootstrap creates the first administrator
+in Pasion using its configured password policy, and queues the normal Matrix
+identity/role synchronization. Sign in through Pasion as `admin`; the Matrix
+identity is `@admin:localhost:8088`. Bootstrap refuses to overwrite a Pasion
+account or run after an administrator already exists. Grant subsequent roles
+in Account management.
+
+For a deployment previously bootstrapped with native Matrix authentication,
+explicitly link its active human administrator using the same username and a
+password file chosen for Pasion:
+
+```sh
+just run --config config/dev/hagency.toml --bootstrap-admin admin \
+  --bootstrap-password-file secrets/admin-password --link-existing-matrix-admin
+```
+
+Linking preserves the Matrix ID, rooms and Hagency ownership. It refuses guest,
+service, suspended, deactivated and non-administrator Matrix identities. Other
+native accounts/passwords are not silently imported; provision or migrate their
+Pasion accounts before enabling delegation. An existing native password file may
+be reused if it satisfies Pasion policy. Stop the development watcher before
+bootstrap; there must be one server process per database. Subsequent starts
+omit all bootstrap options.
 
 Optional `account_config` accepts the original web-admin JSON fields:
 `botMxid`, `botToken`, `adminToken`, `approvers`, `passwordKey`, `registrationToken`.
@@ -394,18 +419,20 @@ verification notifications. Enter that code on the verification page; resend
 once if a registration started before this setting was enabled. The watcher
 reloads this file. Leave the fixed-code option unset outside local tests.
 
-Mounting Pasion and switching Matrix login are independent choices.
-`[hagency].delegate_matrix_auth = false` in `pasion.toml` preserves Palpo's existing native login.
-Set it to `true` **after preparing Pasion accounts** to advertise MSC3861 and
-delegate password login/token introspection to the mounted service. Host
-configuration derives the public issuer and internal endpoints automatically.
-Existing Palpo passwords are not copied into Pasion. Registration is disabled
-by default; configure an upstream provider or explicitly enable Pasion
-registration. This stage does not add legacy Matrix SSO redirects; use OIDC
-clients or the delegated password flow. Web-admin keeps its existing UI and
-uses the Matrix login endpoint, so delegated password login works there too.
-Legacy web-admin account-approval workflows require native auth and are
-rejected when combined with Pasion delegated registration.
+Pasion delegation is enabled by default in generated configurations. The host
+wires Palpo discovery, token introspection and compatible Matrix password login
+to the mounted Pasion service. `/_pasion/` provides the account center;
+`/_pasion/register` is registration, and `/login` is the integrated console entry.
+The old `/account-request` URL redirects to Pasion registration in this mode,
+and the old Hagency account-approval menu is hidden. Human account approvals
+must be expressed through Pasion registration/access policy rather than creating
+a second password authority. The legacy approval worker is preserved for
+explicit native-auth installations and remains incompatible with delegation.
+
+Pasion does not implement legacy Matrix SSO redirects. OAuth clients use the
+mounted issuer; legacy Matrix password clients use the delegated password flow.
+See [the web-admin parity record](docs/WEB_ADMIN_PARITY.md) for retained workflows
+and intentional authentication changes.
 
 The combined distribution includes AGPL-3.0-only Pasion and uses that license.
 The original Apache-2.0 license/notices for Palpo-derived code are retained in

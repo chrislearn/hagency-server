@@ -17,6 +17,8 @@ publish = false
 palpo = { git = "https://github.com/palpo-im/palpo.git", rev = "c8568d9844a6be0a3172d98d7c9810e3a1f7521c" }
 pasion-backend = { git = "https://github.com/meldry-com/pasion.git", rev = "03cd9f94c0c0593c3979de68a0b11ee443f23933", features = ["cedar"] }
 pasion-config = { git = "https://github.com/meldry-com/pasion.git", rev = "03cd9f94c0c0593c3979de68a0b11ee443f23933" }
+pasion-data = { git = "https://github.com/meldry-com/pasion.git", rev = "03cd9f94c0c0593c3979de68a0b11ee443f23933" }
+zeroize = "1"
 figment = "0.10"
 camino = "1"
 rand_chacha = "0.3"

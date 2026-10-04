@@ -302,12 +302,12 @@ pub fn UserList() -> Element {
             PageHeader {
                 title: t("users.title"),
                 description: t("users.subtitle"),
-                Button {
+                if crate::utils::storage::get_item("oauth_enabled").as_deref() != Some("true") { Button {
                     variant: ButtonVariant::Outline,
                     onclick: move |_| show_import_dialog.set(true),
                     Icon { name: "upload".to_string(), class: "h-4 w-4 mr-2".to_string() }
                     {t("users.import_csv")}
-                }
+                } }
                 Button {
                     variant: ButtonVariant::Outline,
                     disabled: is_exporting,
@@ -316,7 +316,7 @@ pub fn UserList() -> Element {
                     if is_exporting { {t("users.exporting")} } else { {t("users.export_csv")} }
                 }
                 Link {
-                    to: Route::UserCreate {},
+                    to: if crate::utils::storage::get_item("oauth_enabled").as_deref() == Some("true") { Route::PasionAccounts {} } else { Route::UserCreate {} },
                     class: "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium h-10 px-4 py-2 btn-gradient",
                     Icon { name: "plus".to_string(), class: "h-4 w-4 mr-2".to_string() }
                     {t("users.create")}
