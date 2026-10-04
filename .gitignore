@@ -1,5 +1,7 @@
 /target/
 /xtask/target/
+/secrets/
+/.cargo/config.toml
 /data/
 /config.toml
 /config.dev.toml

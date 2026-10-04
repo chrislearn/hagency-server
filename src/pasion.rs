@@ -93,7 +93,7 @@ impl PasionConfig {
             .map_err(|_| anyhow::anyhow!("Pasion asset path must be UTF-8"))?;
         anyhow::ensure!(
             pasion_backend::server::discover_frontend_script(&public).is_some(),
-            "Pasion frontend is missing; run python3 scripts/prepare-pasion.py"
+            "Pasion frontend is missing; run just prepare-pasion"
         );
         Ok(vec![
             HttpResource::Discovery,
