@@ -75,7 +75,7 @@ pub fn LoginPage() -> Element {
             }
         }
         div { class:"hg-actions",
-            if cfg.pasion_enabled { a { href:"/_pasion/",class:"hg-link","Account center" } a { href:"/_pasion/register",class:"hg-link","Create a Pasion account" } }
+            if cfg.pasion_enabled { a { href:"/_pasion/",class:"hg-link","Account center" } a { href:"/_pasion/register",class:"hg-link","Create account" } }
             if account_access().flatten().is_some_and(|v|v["enabled"]==true) { Link { to:Route::AccountRequest {},class:"hg-link","Request a Matrix account" } }
         }
     } }
