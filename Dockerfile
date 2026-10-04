@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.98-bookworm AS build
+FROM rust:1.99-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev cmake clang && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp target/release/hagency-server /build/hagency-server
 
 # Build the Dioxus WASM app with the same pinned Pasion source as the backend.
-FROM rust:1.98-trixie AS web-tools
+FROM rust:1.99-trixie AS web-tools
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown

@@ -1,5 +1,13 @@
 # Executed validation
 
+[中文](VALIDATION.zh-CN.md) · [Documentation](README.md)
+
+This is a chronological record of checks performed on earlier implementations.
+For current behavior, read the final unified Pasion section and the
+[configuration guide](guide.md); earlier opt-in authentication and frontend notes
+are superseded by later sections. This documentation edit does not rerun those
+checks.
+
 Validated locally on 2026-10-03 with Rust 1.98.1, PostgreSQL 18.6 and Node 26.9.
 The final Cargo dependency is the public Palpo Git revision
 `c8568d9844a6be0a3172d98d7c9810e3a1f7521c` ([PR #505](https://github.com/palpo-im/palpo/pull/505)).
@@ -302,7 +310,7 @@ Generated profiles now enable Pasion delegation. Pasion owns human passwords,
 registration and administrator roles; its provisioning queue synchronizes Matrix
 identities and roles. The console exposes one Pasion sign-in entry. The workflow
 comparison and intentional legacy approval boundary are recorded in
-`docs/WEB_ADMIN_PARITY.md`.
+[the web-admin parity record](WEB_ADMIN_PARITY.md).
 
 Executed checks:
 
@@ -348,3 +356,27 @@ explicit native-auth compatibility. Unified deployments use Pasion registration
 and account management; that optional legacy policy has not been reimplemented
 inside Pasion. Full-page reloads still require sign-in because frontend bearer
 and refresh tokens remain in memory.
+
+## Bilingual documentation, license metadata and Rust 1.99 (2026-10-04)
+
+README now contains quick setup only, in English and Chinese. The detailed guide,
+workflow comparison and historical validation records live in `docs`, with both
+languages and working navigation. English/Chinese shell and TOML examples match;
+local Markdown paths, heading anchors and code fences were checked.
+
+All three project packages declare Apache-2.0 and Rust 1.99; `LICENSE` contains
+the sole project license text. NOTICE retains the original Palpo/Padmin/Pasion
+provenance and licenses. This metadata change does not relicense upstream AGPL
+code. Earlier statements about locally included upstream license files describe
+the historical state, before this edit.
+
+Executed checks with Rust 1.99.0:
+
+- Locked workspace/all-target `cargo check`, frontend WASM `cargo check` and
+  workspace formatting passed. Existing frontend dead-code warnings remain.
+- `just check-tools` passed formatting, strict Clippy and all five tests.
+- Cargo metadata confirmed Apache-2.0 and Rust 1.99 for backend, frontend and xtask.
+- The Rust 1.99 bookworm/trixie Docker manifest tags were verified available;
+  the full Docker image was not rebuilt for this metadata/documentation change.
+- Existing local server health remained successful; databases and private
+  configuration were not changed by this documentation/toolchain update.

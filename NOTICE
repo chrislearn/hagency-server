@@ -1,15 +1,21 @@
 hagency-server
 
-The unchanged web-admin frontend and controlled test fixture, and the Rust
-backend port, derive from palpo-im/palpo, Copyright Chrislearn Young and Palpo
-contributors, licensed under Apache-2.0. Source snapshot:
+The project manifests declare Apache-2.0; the project license text is LICENSE.
+The upstream code and dependencies listed below retain their original licenses.
+Changing project metadata does not relicense Padmin or Pasion upstream code.
+
+The web-admin workflows, controlled test fixture and Rust backend port derive
+from palpo-im/palpo, Copyright Chrislearn Young and Palpo contributors,
+licensed under Apache-2.0. Source snapshot:
 https://github.com/palpo-im/palpo/tree/3f1ad3ba5c80a7206521b3eb4059a4f1f3786700
 
 Pasion is embedded from meldry-com/pasion under AGPL-3.0-only.
-The combined hagency-server distribution uses AGPL-3.0-only; the original
-Apache-2.0 notices and license for the Palpo-derived code remain included.
+Source and upstream license:
+https://github.com/meldry-com/pasion/tree/03cd9f94c0c0593c3979de68a0b11ee443f23933
+https://github.com/meldry-com/pasion/blob/03cd9f94c0c0593c3979de68a0b11ee443f23933/LICENSE
 
 The Dioxus frontend in crates/frontend derives from meldry-com/padmin,
 Copyright Meldry Team and contributors, licensed under AGPL-3.0-or-later.
-Source snapshot: https://github.com/meldry-com/padmin/tree/83d4567470ada808b89914aa0c786cdc3a7ac89a
-Its original license is included in crates/frontend/LICENSE.
+Source and upstream license:
+https://github.com/meldry-com/padmin/tree/83d4567470ada808b89914aa0c786cdc3a7ac89a
+https://github.com/meldry-com/padmin/blob/83d4567470ada808b89914aa0c786cdc3a7ac89a/LICENSE

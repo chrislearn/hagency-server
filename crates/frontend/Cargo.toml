@@ -2,7 +2,8 @@
 name = "hagency-frontend"
 version.workspace = true
 authors = ["Meldry Team", "Hagency contributors"]
-license = "AGPL-3.0-or-later"
+license.workspace = true
+rust-version.workspace = true
 edition = "2024"
 
 [dependencies]

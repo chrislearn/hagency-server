@@ -2,7 +2,8 @@
 name = "hagency-xtask"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.99"
+license = "Apache-2.0"
 publish = false
 
 # Keep tooling dependency resolution/builds independent of the large server.

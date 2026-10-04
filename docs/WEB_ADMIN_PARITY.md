@@ -1,5 +1,7 @@
 # Palpo web-admin migration and unified accounts
 
+[中文](WEB_ADMIN_PARITY.zh-CN.md) · [Documentation](README.md)
+
 Source baseline: local Palpo `web-admin` at frontend redesign commit
 `1032153e` (the embedded Palpo revision is recorded in Cargo.toml).
 The goal is equivalent Hagency workflows in Padmin's Dioxus UI, not identical
