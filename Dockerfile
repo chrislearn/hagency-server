@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev cmake
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY xtask ./xtask
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
@@ -28,7 +29,7 @@ COPY xtask ./xtask
 RUN --mount=type=cache,id=hagency-frontend-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=hagency-frontend-git,target=/usr/local/cargo/git \
     --mount=type=cache,id=hagency-frontend-target,target=/build/.run/frontend-target \
-    --mount=type=cache,id=hagency-xtask-target,target=/build/xtask/target \
+    --mount=type=cache,id=hagency-xtask-target,target=/build/target \
     cargo run --quiet --locked --manifest-path xtask/Cargo.toml -- prepare-frontend --output /frontend-resources
 
 FROM web-tools AS pasion-assets
@@ -36,10 +37,13 @@ ARG PASION_REV=03cd9f94c0c0593c3979de68a0b11ee443f23933
 RUN git init /pasion && git -C /pasion remote add origin https://github.com/meldry-com/pasion.git \
     && git -C /pasion fetch --depth 1 origin "$PASION_REV" && git -C /pasion checkout --detach FETCH_HEAD
 WORKDIR /build
-COPY xtask /build/xtask
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY xtask ./xtask
 RUN --mount=type=cache,id=hagency-pasion-wasm-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=hagency-pasion-wasm-git,target=/usr/local/cargo/git \
     --mount=type=cache,id=hagency-pasion-wasm-target,target=/pasion/target \
-    --mount=type=cache,id=hagency-xtask-target,target=/build/xtask/target \
+    --mount=type=cache,id=hagency-xtask-target,target=/build/target \
     cargo run --quiet --locked --manifest-path xtask/Cargo.toml -- \
     prepare-pasion --source /pasion --output /pasion-resources
 

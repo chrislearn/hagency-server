@@ -9,9 +9,9 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-ruma-identifiers-validation = "0.12.1"
+ruma-identifiers-validation.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
-ryu-js = "1.0.3"
+ryu-js.workspace = true
 thiserror.workspace = true

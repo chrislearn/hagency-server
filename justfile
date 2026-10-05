@@ -57,7 +57,7 @@ docker-up:
 docker-down:
     docker compose down
 
-# Check formatting and compile/test the independent Rust development tools.
+# Check formatting and compile/test the Rust development tools.
 check-tools:
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings

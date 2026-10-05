@@ -4,17 +4,17 @@ version.workspace = true
 authors = ["Meldry Team", "Hagency contributors"]
 license.workspace = true
 rust-version.workspace = true
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
-dioxus = { version = "=0.7.5", features = ["web", "router"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-serde-saphyr = "0.0.27"
-gloo-net = { version = "0.7", features = ["http", "json"] }
-gloo-storage = "0.4.0"
-gloo-timers = { version = "0.4", features = ["futures"] }
-web-sys = { version = "0.3.95", features = [
+dioxus = { workspace = true, features = ["web", "router"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde-saphyr.workspace = true
+gloo-net = { workspace = true, features = ["http", "json"] }
+gloo-storage.workspace = true
+gloo-timers = { workspace = true, features = ["futures"] }
+web-sys = { workspace = true, features = [
     "Window",
     "Document",
     "HtmlDocument",
@@ -42,12 +42,12 @@ web-sys = { version = "0.3.95", features = [
     "EventTarget",
     "Event",
 ] }
-wasm-bindgen = "0.2.118"
-wasm-bindgen-futures = "0.4.68"
-js-sys = "0.3.95"
-chrono = { version = "0.4.44", features = ["serde", "wasmbind"] }
-urlencoding = "2.1.3"
-log = "0.4.29"
-dioxus-logger = "0.7.4"
-regex-lite = "0.1.9"
-futures = "0.3.31"
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+chrono = { workspace = true, features = ["serde", "wasmbind"] }
+urlencoding.workspace = true
+log.workspace = true
+dioxus-logger.workspace = true
+regex-lite.workspace = true
+futures.workspace = true

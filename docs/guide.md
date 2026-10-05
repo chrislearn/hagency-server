@@ -12,7 +12,7 @@ The Cargo workspace follows Pasion's backend/frontend organization:
 crates/
 ├─ backend/   # hagency-server: embedded Palpo, Pasion and Hagency APIs
 └─ frontend/  # hagency-frontend: Dioxus/WASM, based on copied Padmin source
-xtask/       # independent development/configuration tools
+xtask/       # development/configuration tools (workspace member)
 resources/   # generated frontend and Pasion assets, ignored by Git
 ```
 
@@ -79,7 +79,7 @@ scripts in `tests/`. Python is not required.
 `rust-toolchain.toml` pins Rust 1.99.0 with rustfmt, Clippy and the WASM target;
 Docker build stages use the matching Rust 1.99 images.
 
-`just --list` shows the commands. Just orchestrates them; an independent Rust
+`just --list` shows the commands. Just orchestrates them; the workspace’s Rust
 `xtask` implements private configuration generation, asset preparation and the
 development watcher without compiling the server to run these tools.
 

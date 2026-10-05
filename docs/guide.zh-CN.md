@@ -11,7 +11,7 @@ Cargo workspace 采用类似 Pasion 的后端、前端组织方式：
 crates/
 ├─ backend/   # hagency-server：内嵌 Palpo、Pasion 和 Hagency API
 └─ frontend/  # hagency-frontend：基于复制的 Padmin 源码，使用 Dioxus/WASM
-xtask/       # 独立的开发、配置工具
+xtask/       # 开发、配置工具（workspace 成员）
 resources/   # 生成的前端与 Pasion 资源，不提交到 Git
 ```
 
@@ -66,7 +66,7 @@ Git 和 curl 用于获取工具或源码。两个前端都通过 Rust 和 Dioxus
 只有执行 `tests/` 下 JavaScript HTTP/集成测试脚本时才需要可选的 Node.js，不需要 Python。
 `rust-toolchain.toml` 固定 Rust 1.99.0，并配置 rustfmt、Clippy 和 WASM 目标；Docker 构建阶段使用对应的 Rust 1.99 镜像。
 
-`just --list` 显示全部命令。Just 负责组织命令；独立的 Rust `xtask` 实现私有配置生成、资源准备和开发监听，运行这些工具不需要先编译服务器。
+`just --list` 显示全部命令。Just 负责组织命令；workspace 中的 Rust `xtask` 实现私有配置生成、资源准备和开发监听，运行这些工具不需要先编译服务器。
 
 ```sh
 just init-dev
