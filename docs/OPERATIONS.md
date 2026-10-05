@@ -2,6 +2,29 @@
 
 [中文](OPERATIONS.zh-CN.md) · [Documentation](README.md)
 
+## Fleet naming
+
+A Fleet is one resource service's registration with this server, owned by a
+Pasion/Matrix user. It has its own App Service, credentials, namespace, published
+resources and connection lifecycle. One Fleet can provide multiple Agents and
+serve multiple projects. The user-facing page is **My Fleets** at
+`/hagency/fleets`; `/hagency/hafleets` and `/hagency/my-hagencys` redirect there.
+Rust modules, functions and identifiers use `fleet` / `Fleet`.
+
+Management clients use `/api/fleets` and `/api/my/fleets`. Canonical responses use
+`fleet`, `fleets`, `fleetId` and `fleetName`. Native enrollment uses
+`/_hagency/client/v1/fleets` and `fleets/{id}/connect`; policy lives in
+`[fleet_access]`. Deprecated Hafleet URLs, the `hafleetId` input alias and the
+`[hafleet_access]` configuration key remain accepted. Old management/enrollment
+URLs also receive their old response aliases. Conflicting `hafleetId` / `fleetId`
+inputs are rejected before an operation is created.
+
+Machine endpoints and downloaded credentials use `/api/fleet/v2/{id}`;
+`/api/hafleet/v2/{id}` remains an authenticated compatibility alias. Existing
+`hf_` IDs, App Service registrations, Matrix event bindings, canonical payloads,
+database keys and audit history are retained. No token rotation, re-registration
+or database migration is needed for this vocabulary change.
+
 ## Component boundaries
 
 | Component | Owns | Does not own |

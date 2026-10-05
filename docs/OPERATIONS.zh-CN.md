@@ -2,6 +2,25 @@
 
 [English](OPERATIONS.md) · [文档目录](README.zh-CN.md)
 
+## Fleet 命名
+
+Fleet 是一套资源服务在本服务器的接入注册，归属于 Pasion/Matrix 用户，拥有
+独立的 App Service、凭据、命名空间、资源目录和连接生命周期。一个 Fleet 可
+提供多个 Agent、服务多个项目。界面为 **My Fleets**，入口为
+`/hagency/fleets`；旧 `/hagency/hafleets`、`/hagency/my-hagencys` 书签自动跳转。
+Rust 模块、函数和标识符统一使用 `fleet` / `Fleet`。
+
+管理客户端使用 `/api/fleets`、`/api/my/fleets`，标准响应使用 `fleet`、
+`fleets`、`fleetId`、`fleetName`。原生接入使用 `/_hagency/client/v1/fleets`
+及 `fleets/{id}/connect`；自助接入政策位于 `[fleet_access]`。
+旧 Hafleet URL、输入字段 `hafleetId` 和配置键 `[hafleet_access]` 仍可使用。
+旧管理/原生接入 URL 的响应另带旧字段别名；输入同时包含不同值的
+`hafleetId` / `fleetId` 时，在创建操作前拒绝。
+
+机器接口与下载凭据使用 `/api/fleet/v2/{id}`；旧 `/api/hafleet/v2/{id}` 保留
+同样的认证校验。既有 `hf_` ID、App Service 注册、Matrix 事件绑定、规范摘要
+正文、数据库键和审计历史保留。此次改名无需轮换 token、重新注册或迁移数据库。
+
 ## 组件边界
 
 | 组件 | 负责 | 不承担 |

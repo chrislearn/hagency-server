@@ -61,11 +61,11 @@ pub fn RequestAgent() -> Element {
         && !chosen.is_null()
         && valid_role;
     rsx! { div { class: "hg-page",
-        Heading { title: "Request an agent", description: "Choose a project, then a published resource and role. The Hagency owner reviews the requested allocation.", resource }
+        Heading { title: "Request an agent", description: "Choose a project, then a published resource and role. The Fleet owner reviews the requested allocation.", resource }
         Message { notice } Status { resource }
         RenewalWarnings { fleets:rows(&loaded,"fleets") }
         if fleet["transport"]["mode"] == "outbound" && fleet["transport"]["online"] == false && provider_ready {
-            p { class: "hg-notice", "This Hagency is offline. Requests use its last published resources and will be queued until it reconnects. Its owner still needs to approve the allocation." }
+            p { class: "hg-notice", "This Fleet is offline. Requests use its last published resources and will be queued until it reconnects. Its owner still needs to approve the allocation." }
         }
         if projects.is_empty() && resource().is_some_and(|v|v.is_ok()) { div { class: "hg-card",
             p { "Create a project before requesting an agent." }
@@ -80,7 +80,7 @@ pub fn RequestAgent() -> Element {
                 match hagency::call("/requests", "POST", Some(body)).await {
                     Ok(result) => {
                         let state = text(&result["request"],"state");
-                        notice.set(Some((false,format!("Agent request saved ({state}). The Hagency owner must approve it before the agent is available."))));
+                        notice.set(Some((false,format!("Agent request saved ({state}). The Fleet owner must approve it before the agent is available."))));
                         operation.set(next_operation("request")); name.set(String::new()); resource.restart();
                     },
                     Err(e) => notice.set(Some((true,format!("{} Your fields and operation reference are kept for retry.",e.message)))),
@@ -102,7 +102,7 @@ pub fn RequestAgent() -> Element {
             label { class: "hg-field", "Agent name" input { class: "hg-input", required: true, maxlength: 64, value: name(), placeholder: "Edison or 小白", oninput: move |e|name.set(e.value()) } }
             label { class: "hg-field", "Total token allowance" input { class: "hg-input", r#type: "number", min: 1, step: 1, required: true, value: tokens(), oninput: move |e|tokens.set(e.value()) } }
             label { class: "hg-field", "Daily token allowance" input { class: "hg-input", r#type: "number", min: 1, step: 1, required: true, value: per_day(), oninput: move |e|per_day.set(e.value()) } }
-            if !usable { p { class: "hg-note hg-wide", "Select a ready project, an available resource and its role. If connection verification is missing or expired, ask the provider owner to verify it in My Hagencys. An established outbound provider can queue requests while offline." } }
+            if !usable { p { class: "hg-note hg-wide", "Select a ready project, an available resource and its role. If connection verification is missing or expired, ask the provider owner to verify it in My Fleets. An established outbound provider can queue requests while offline." } }
             details { class: "hg-wide", summary { "Operation reference" } code { "{operation()}" } }
             button { class: "hg-button", r#type: "submit", disabled: busy() || !usable, if busy() { "Submitting…" } else { "Send agent request" } }
         }
@@ -141,7 +141,7 @@ pub fn Requests() -> Element {
         Message { notice } Status { resource }
         Link { to: Route::HagencyRequestAgent {}, class: "hg-link", "Request an agent" }
         if requests.iter().any(|r|r["lastError"]["code"]=="outbound_status_stale") {
-            p { class:"hg-notice", "Some requests have not received a recent status from Hagency. They are not usable until current status and room membership are verified." }
+            p { class:"hg-notice", "Some requests have not received a recent status from the Fleet. They are not usable until current status and room membership are verified." }
         }
         for (index,label) in ["Needs attention","Waiting for agent to join","In review","Ready to use","Ended"].into_iter().enumerate() {
             {
@@ -162,8 +162,8 @@ pub fn Requests() -> Element {
                             if request["provider"]["fulfillment"]["error"].is_string() {
                                 p { class:"hg-notice hg-error",{text(&request["provider"]["fulfillment"],"error")} }
                             }
-                            if request["state"]=="queued" { p { class:"hg-note","Stored on this server. Waiting for Hagency delivery and its owner's allocation decision." } }
-                            if request["state"]=="pending" { p { class:"hg-note","Waiting for the Hagency owner's resource decision." } }
+                            if request["state"]=="queued" { p { class:"hg-note","Stored on this server. Waiting for Fleet delivery and its owner's allocation decision." } }
+                            if request["state"]=="pending" { p { class:"hg-note","Waiting for the Fleet owner's resource decision." } }
                             if request["state"]=="submission_pending" { p { class:"hg-notice","The request has not been delivered yet. Retry uses the same request reference." } }
                             if request["usable"] == true { RoomLink { room: text(&request,"targetRoomId"), label: "Open project and use agent" } }
                             if !request["lastError"].is_null() { p { class: "hg-note", {text(&request["lastError"],"code")} } }

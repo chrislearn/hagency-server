@@ -34,8 +34,12 @@ pub enum Route {
         HagencyRequestAgent {},
         #[route("/hagency/requests")]
         HagencyRequests {},
+        #[route("/hagency/fleets")]
+        HagencyFleets {},
+        #[route("/hagency/hafleets")]
+        HagencyFleetNameLegacy {},
         #[route("/hagency/my-hagencys")]
-        HagencyOwned {},
+        HagencyFleetsLegacy {},
         #[route("/hagency/connections")]
         HagencyConnections {},
         #[route("/hagency/connections/:fleet_id/agents")]
@@ -218,7 +222,9 @@ fn AuthenticatedLayout() -> Element {
                     | Route::HagencyProjects {}
                     | Route::HagencyRequestAgent {}
                     | Route::HagencyRequests {}
-                    | Route::HagencyOwned {}
+                    | Route::HagencyFleets {}
+                    | Route::HagencyFleetsLegacy {}
+                    | Route::HagencyFleetNameLegacy {}
             );
             if matches!(route, Route::Dashboard {}) {
                 nav.replace(Route::HagencyProjects {});
@@ -283,8 +289,18 @@ fn HagencyRequests() -> Element {
     rsx! { pages::hagency::requests::Requests {} }
 }
 #[component]
-fn HagencyOwned() -> Element {
-    rsx! { pages::hagency::connections::MyHagencys {} }
+fn HagencyFleets() -> Element {
+    rsx! { pages::hagency::connections::MyFleets {} }
+}
+#[component]
+fn HagencyFleetNameLegacy() -> Element {
+    use_navigator().replace(Route::HagencyFleets {});
+    rsx! { div { "Opening My Fleets…" } }
+}
+#[component]
+fn HagencyFleetsLegacy() -> Element {
+    use_navigator().replace(Route::HagencyFleets {});
+    rsx! { div { "Opening My Fleets…" } }
 }
 #[component]
 fn HagencyConnections() -> Element {

@@ -31,7 +31,7 @@ pub fn Projects() -> Element {
     let fleets = rows(&loaded, "fleets");
     let projects = rows(&loaded, "projects");
     rsx! { div { class: "hg-page",
-        Heading { title: "Projects", description: "Create a project room or register an existing room you own. Agent allocations are approved by the Hagency owner.", resource }
+        Heading { title: "Projects", description: "Create a project room or register an existing room you own. Agent allocations are approved by the Fleet owner.", resource }
         Message { notice } Status { resource }
         RenewalWarnings { fleets: rows(&loaded,"fleets") }
         form { class: "hg-card hg-form", onsubmit: move |event| {
@@ -46,7 +46,7 @@ pub fn Projects() -> Element {
             });
         },
             h2 { "Create a project" }
-            label { class: "hg-field", "Hagency provider" select { class: "hg-input", required: true, value: provider(), onchange: move |e| provider.set(e.value()),
+            label { class: "hg-field", "Fleet provider" select { class: "hg-input", required: true, value: provider(), onchange: move |e| provider.set(e.value()),
                 option { value: "", "Choose a provider" }
                 for fleet in fleets { option { value: text(&fleet,"id"), {text(&fleet,"name")} } }
             } }

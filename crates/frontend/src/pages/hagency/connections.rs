@@ -19,7 +19,7 @@ pub fn Connections() -> Element {
     let mut busy = use_signal(|| false);
     let mut notice = use_signal(|| None);
     rsx! { div { class: "hg-page",
-        Heading { title: "Hagency connections", description: "Authorize agent providers and manage their Matrix service accounts. Owners download configuration and verify their connection.", resource }
+        Heading { title: "Fleet connections", description: "Authorize agent providers and manage their Matrix service accounts. Owners download configuration and verify their connection.", resource }
         Message { notice } Status { resource }
         form { class: "hg-card hg-form", onsubmit: move |event| {
             event.prevent_default(); if busy() { return; }
@@ -28,12 +28,12 @@ pub fn Connections() -> Element {
             busy.set(true);
             spawn(async move {
                 match hagency::call("/fleets","POST",Some(body)).await {
-                    Ok(_) => { notice.set(Some((false,"Hagency authorized. Its owner can now download the configuration and verify the connection.".into()))); operation.set(next_operation("authorization")); name.set(String::new()); owner.set(String::new()); resource.restart(); },
+                    Ok(_) => { notice.set(Some((false,"Fleet authorized. Its owner can now download the configuration and verify the connection.".into()))); operation.set(next_operation("authorization")); name.set(String::new()); owner.set(String::new()); resource.restart(); },
                     Err(e) => notice.set(Some((true,format!("{} Keep the same operation reference to resume a partial installation.",e.message)))),
                 } busy.set(false);
             });
         },
-            h2 { "Authorize a Hagency" }
+            h2 { "Authorize a Fleet" }
             label { class: "hg-field", "Name" input { class: "hg-input", required: true, maxlength: 128, value: name(), oninput: move |e|name.set(e.value()) } }
             label { class: "hg-field", "Owner Matrix ID" input { class: "hg-input", required: true, placeholder: "@owner:server", value: owner(), oninput: move |e|owner.set(e.value()) } }
             label { class: "hg-field", "Connection" select { class: "hg-input", value: mode(), onchange: move |e|mode.set(e.value()),
@@ -43,10 +43,10 @@ pub fn Connections() -> Element {
             if mode() == "callback" { label { class: "hg-field", "Callback URL" input { class: "hg-input", r#type: "url", required: true, value: callback(), oninput: move |e|callback.set(e.value()) } } }
             p { class:"hg-note hg-wide", {if callback_origins.is_empty() { "No callback origins are allowed. Use outbound, or configure the server callback policy.".into() } else { format!("Allowed callback origins: {}",callback_origins.join(", ")) }} }
             details { class: "hg-wide", summary { "Operation reference" } code { "{operation()}" } }
-            button { class: "hg-button", r#type: "submit", disabled: busy(), if busy() { "Authorizing…" } else { "Authorize Hagency" } }
+            button { class: "hg-button", r#type: "submit", disabled: busy(), if busy() { "Authorizing…" } else { "Authorize Fleet" } }
         }
         div { class: "hg-grid", for fleet in rows(&data(resource),"fleets") { FleetCard { key:"{fleet[\"id\"]}", fleet, resource, busy, notice } } }
-        if rows(&data(resource),"fleets").is_empty() && resource().is_some_and(|v|v.is_ok()) { p { class: "hg-note", "No Hagencys are registered." } }
+        if rows(&data(resource),"fleets").is_empty() && resource().is_some_and(|v|v.is_ok()) { p { class: "hg-note", "No fleets are registered." } }
     } }
 }
 
@@ -83,7 +83,7 @@ fn FleetCard(fleet: Value, resource: Data, busy: Signal<bool>, notice: Notice) -
                     {
                         let path = format!("/fleets/{id}/{operation}");
                         rsx! { button { class: "hg-button hg-secondary", disabled: busy(), onclick: move |_| {
-                            if operation != "revoke" || confirm("Revoke this Matrix service? Its service credential will stop working. Retire identities separately; local agent tasks require Hagency confirmation.") {
+                            if operation != "revoke" || confirm("Revoke this Matrix service? Its service credential will stop working. Retire identities separately; local agent tasks require confirmation from the Fleet.") {
                                 action(path.clone(),"POST",json!({}),"Service state updated.".into(),resource,busy,notice);
                             }
                         }, "{label}" } }
@@ -119,7 +119,7 @@ fn FleetCard(fleet: Value, resource: Data, busy: Signal<bool>, notice: Notice) -
 }
 
 #[component]
-pub fn MyHagencys() -> Element {
+pub fn MyFleets() -> Element {
     let mut resource = use_resource(|| async { get("/my/fleets").await });
     use_future(move || async move {
         loop {
@@ -135,11 +135,11 @@ pub fn MyHagencys() -> Element {
     let busy = use_signal(|| false);
     let notice = use_signal(|| None);
     rsx! { div { class: "hg-page",
-        Heading { title: "My Hagencys", description: "Download each provider configuration into your Hagency, then verify the Matrix event channel and reception room.", resource }
+        Heading { title: "My Fleets", description: "Sign in from hagency-client to configure your Fleet automatically, or import an existing configuration and verify the connection.", resource }
         Message { notice } Status { resource }
         RenewalWarnings { fleets:rows(&data(resource),"fleets") }
         div { class: "hg-grid", for fleet in rows(&data(resource),"fleets") { OwnedFleet { key:"{fleet[\"id\"]}", fleet, resource, busy, notice } } }
-        if rows(&data(resource),"fleets").is_empty() && resource().is_some_and(|v|v.is_ok()) { p { class: "hg-note", "No Hagencys are assigned to your account. You can still create projects and request agents from available providers." } }
+        if rows(&data(resource),"fleets").is_empty() && resource().is_some_and(|v|v.is_ok()) { p { class: "hg-note", "No fleets are assigned to your account. You can still create projects and request agents from available providers." } }
     } }
 }
 
@@ -166,7 +166,7 @@ fn OwnedFleet(
                 spawn(async move {
                     match hagency::call(&path,"POST",Some(json!({}))).await {
                         Ok(value) => match download(&value,&filename) {
-                            Ok(()) => { notice.set(Some((false,"Configuration downloaded. Import it into the Hagency credential store, then verify the connection.".into()))); resource.restart(); },
+                            Ok(()) => { notice.set(Some((false,"Configuration downloaded. Import it into the hagency-rs credential store, then verify the connection.".into()))); resource.restart(); },
                             Err(e) => notice.set(Some((true,e))),
                         },
                         Err(e) => notice.set(Some((true,e.message))),
@@ -193,7 +193,7 @@ pub fn Agents(fleet_id: String) -> Element {
     let mut busy = use_signal(|| false);
     let mut notice = use_signal(|| None);
     rsx! { div { class: "hg-page",
-        Heading { title: "Agent identities", description: "Manage Matrix identities for approved agent requests. Agent allocation and execution are handled by the Hagency provider.", resource }
+        Heading { title: "Agent identities", description: "Manage Matrix identities for approved agent requests. Agent allocation and execution are handled by the Fleet provider.", resource }
         Message { notice } Status { resource }
         Link { to: Route::HagencyConnections {}, class: "hg-link", "Back to connections" }
         form { class: "hg-card hg-form", onsubmit: move |event| {
@@ -237,7 +237,7 @@ fn AgentCard(
                 }
             },"Edit display name" } }
             if agent["state"] != "retired" { button { class:"hg-button hg-secondary",disabled:busy(),onclick:move|_| {
-                if confirm("Retire this Matrix identity and remove its room memberships? History is preserved; local agent tasks require Hagency confirmation.") {
+                if confirm("Retire this Matrix identity and remove its room memberships? History is preserved; local agent tasks require confirmation from the Fleet.") {
                     action(retire_path.clone(),"POST",json!({}),"Identity retirement requested. Refresh to inspect Matrix state.".into(),resource,busy,notice);
                 }
             },"Retire identity" } }
@@ -253,7 +253,7 @@ pub fn Activity() -> Element {
         Status { resource }
         div { class:"hg-stack",for event in rows(&data(resource),"events") { article { class:"hg-card",
             h2 { {text(&event,"action")} }
-            Facts { rows:vec![("Time".into(),text(&event,"at")),("Actor".into(),text(&event,"actor")),("Hagency".into(),text(&event,"fleetId")),("Object".into(),text(&event,"objectId")),("Result".into(),text(&event,"result"))] }
+            Facts { rows:vec![("Time".into(),text(&event,"at")),("Actor".into(),text(&event,"actor")),("Fleet".into(),text(&event,"fleetId")),("Object".into(),text(&event,"objectId")),("Result".into(),text(&event,"result"))] }
         } } }
         if rows(&data(resource),"events").is_empty() && resource().is_some_and(|v|v.is_ok()) { p { class:"hg-note","No operations recorded yet." } }
     } }

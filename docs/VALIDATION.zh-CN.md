@@ -220,3 +220,20 @@ Operations 和原 fleet API 共用现有 Hagency PostgreSQL 状态与写锁；�
 Palpo 清理在独立分支提交为草稿 [PR #512](https://github.com/palpo-im/palpo/pull/512)，移除旧应用及其 CI，补充双语迁移说明。
 确认全部 Rust 源码、Cargo 清单/锁文件、Matrix 测试/部署均未修改，没有遗留的应用路径引用，空白检查通过；这种源码移除/文档变更未重跑 Palpo Rust 测试。
 替代版本发布及客户端/状态迁移验收前，该 PR 保持草稿。草稿中尚未完成的在线关联/delegation 不声明为已实现。
+
+## Fleet 名称统一（2026-10-05）
+
+- hagency-client 与 hagency-server 的界面、源码、原生接入接口、配置示例及
+  中英文文档统一为 Fleet。
+- Workspace 库测试 8 项通过，Operations HTTP 工作流 16 项通过；两项依赖
+  专用 PostgreSQL 数据库的可选持久化检查未执行。
+- 13 组管理 HTTP 契约通过，覆盖标准 Fleet 响应、旧 Hafleet 路径/输入兼容、
+  所有者隔离、标识冲突拒绝及完全一致的配对凭据。
+- 原生接入契约通过，覆盖新旧配置键、数量上限、幂等凭据及所有者隔离。
+- 客户端 PKCE/账号绑定/token 撤销回归、两端 Rust Clippy 和两端前端构建通过。
+  服务器前端原有的未使用代码警告仍存在。
+- 真实 Rust 客户端/服务器与受控 Pasion/Matrix 的接入集成通过：自动导入、
+  outbound poll、App Service 投递、精确 probe 回执与 reception 验证。
+- 受控浏览器 fixture 确认 `/hagency/fleets` 显示 **My Fleets**，侧栏显示
+  **Fleet connections**，并保留 Matrix/Padmin 导航。
+- 既有 ID、注册、token、协议字段与审计历史保留，无需数据库迁移。

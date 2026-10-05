@@ -23,7 +23,9 @@ pub struct Admin {
     pub(crate) mutations: Arc<Mutex<()>>,
     session_ttl: i64,
     read_timeout: Duration,
-    oauth_revocation: Option<(Url, String)>,
+    pub(crate) oauth_revocation: Option<(Url, String)>,
+    pub(crate) fleet_access: crate::config::FleetAccessConfig,
+    pub(crate) embedded_matrix: bool,
 }
 #[derive(Clone)]
 struct Session {
@@ -78,6 +80,8 @@ impl Admin {
             account_config,
             accounts_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             account_error: Arc::new(Mutex::new(None)),
+            fleet_access: conf.fleet_access.clone(),
+            embedded_matrix: true,
             sessions: Default::default(),
             rates: Default::default(),
             mutations: Default::default(),
@@ -138,6 +142,11 @@ impl Admin {
     }
     pub fn router(&self) -> Router {
         Router::new()
+            .push(
+                Router::with_path("_hagency/client/v1/{**path}")
+                    .hoop(salvo::size_limiter::max_size(16384))
+                    .goal(self.clone()),
+            )
             .push(hagency_operations::api::miniapp_router(
                 self.operations.clone(),
             ))
@@ -150,10 +159,14 @@ impl Admin {
             url.as_str(),
             self.server_name.clone().try_into()?,
         )?;
-        self.palpo = Upstream::new(url);
+        self.palpo = Upstream::new(url.clone());
+        self.embedded_matrix = false;
+        if let Some((endpoint, _)) = &mut self.oauth_revocation {
+            *endpoint = url.join("_pasion/oauth2/revoke")?;
+        }
         Ok(self)
     }
-    async fn rate(&self, key: String, max: u32, window: i64) -> Result<()> {
+    pub(crate) async fn rate(&self, key: String, max: u32, window: i64) -> Result<()> {
         let mut rates = self.rates.lock().await;
         rates.retain(|_, (_, until)| *until > millis());
         let rate = rates.entry(key).or_insert((0, millis() + window));
@@ -277,15 +290,22 @@ impl Admin {
                 "Request body exceeds the endpoint limit.",
             )
         })?;
-        let value: Value = serde_json::from_slice(raw)
+        let mut value: Value = serde_json::from_slice(raw)
             .map_err(|_| err(400, "invalid_json", "A JSON object is required."))?;
         if !value.is_object() {
             return Err(err(400, "invalid_json", "A JSON object is required."));
         }
+        // Accept the deprecated input alias without changing canonical request digests.
+        if let Some(id) = value.as_object_mut().unwrap().remove("hafleetId") {
+            if value.get("fleetId").is_some_and(|old| old != &id) {
+                return Err(err(400, "ambiguous_fleet", "Fleet identifiers disagree."));
+            }
+            value["fleetId"] = id;
+        }
         Ok(value)
     }
     async fn route(&self, req: &mut Request, res: &mut Response) -> Result<(u16, Value)> {
-        let path = req.uri().path().to_string();
+        let path = super::fleet::canonical_path(req.uri().path());
         let method = req.method().as_str().to_string();
         let host = req
             .headers()
@@ -305,6 +325,17 @@ impl Admin {
             .and_then(|s| s.strip_prefix("Bearer "))
             .unwrap_or("")
             .to_string();
+        if path.starts_with("/_hagency/client/v1/") {
+            return super::native_client::route(
+                self,
+                req,
+                &path,
+                &host,
+                origin.as_deref(),
+                &bearer,
+            )
+            .await;
+        }
         let machine =
             regex::Regex::new(r"^/api/fleet/v2/(hf_[a-f0-9]{32})/(poll|ack|updates|retire-agent)$")
                 .unwrap();
@@ -844,7 +875,16 @@ impl Admin {
         match result {
             Ok((status, data)) => {
                 res.status_code(StatusCode::from_u16(status).unwrap());
-                res.render(Json(data));
+                let path = req.uri().path();
+                let legacy = (path.starts_with("/api/hafleets")
+                    || path.starts_with("/api/my/hafleets")
+                    || path.starts_with("/_hagency/client/v1/hafleets"))
+                    && !path.ends_with("/pair");
+                res.render(Json(if legacy {
+                    super::fleet::legacy_management_view(data)
+                } else {
+                    data
+                }));
             }
             Err(e) => render_error(res, e),
         }
@@ -854,7 +894,7 @@ fn render_error(res: &mut Response, e: ApiError) {
     res.status_code(StatusCode::from_u16(e.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     res.render(Json(json!({"code":e.code,"error":e.message})));
 }
-fn host_port(url: &Url) -> String {
+pub(crate) fn host_port(url: &Url) -> String {
     url[url::Position::BeforeHost..url::Position::AfterPort].to_string()
 }
 fn address(req: &Request) -> String {

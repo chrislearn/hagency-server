@@ -40,6 +40,7 @@ pub struct Upstream {
     pub url: Url,
     client: Client,
     label: &'static str,
+    embedded_admin: bool,
 }
 impl Upstream {
     pub fn new(url: Url) -> Self {
@@ -54,7 +55,12 @@ impl Upstream {
                 .build()
                 .expect("HTTP client"),
             label,
+            embedded_admin: false,
         }
+    }
+    pub(crate) fn server_authority(mut self) -> Self {
+        self.embedded_admin = true;
+        self
     }
     pub(crate) async fn raw(
         &self,
@@ -63,6 +69,11 @@ impl Upstream {
         method: Method,
         body: Option<&Value>,
     ) -> Result<(u16, Value)> {
+        if self.embedded_admin
+            && let Some(result) = super::native_client::embedded_admin(path, &method, body).await
+        {
+            return result;
+        }
         let url = self
             .url
             .join(path)

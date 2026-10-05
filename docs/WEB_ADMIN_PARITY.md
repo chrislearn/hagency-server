@@ -10,9 +10,9 @@ changes to Pasion in the default deployment.
 
 | Workflow | Rust/Dioxus implementation | Verification |
 | --- | --- | --- |
-| Provider grant, isolated App Service, resumable install, drift detection | backend admin/fleet.rs; frontend Hagency connections | HTTP contract; live Matrix integration |
+| Provider grant, isolated App Service, resumable install, drift detection | backend admin/fleet.rs; frontend Fleet connections | HTTP contract; live Matrix integration |
 | Outbound migration/rotation, queue limits, leases, ACK, online/current-generation proof | backend admin/outbound.rs; connections and capacity inspection | HTTP contract; live Matrix integration |
-| Owner-only pairing/config download, exact event receipt and reception memberships | backend admin/workflow.rs; My Hagencys | HTTP contract; live Matrix integration |
+| Owner-only pairing/config download, exact event receipt and reception memberships | backend admin/workflow.rs; My Fleets | HTTP contract; live Matrix integration |
 | Project creation or existing room binding, encrypted private approval room, owner/member authority | backend admin/workflow.rs; Projects | HTTP contract; live Matrix integration |
 | Published resource and role selection, named Agent, token/daily quota, durable request/retry | backend admin/workflow.rs; Request an agent | HTTP contract; frontend role/resource checks |
 | Provider decisions, actual running configuration/preparation, stale status, actual room admission before usable | backend admin/workflow.rs; Agent requests | HTTP contract; live Matrix integration; readiness grouping regression |

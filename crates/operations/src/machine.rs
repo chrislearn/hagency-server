@@ -12,6 +12,12 @@ use crate::{Result, fail, now_ms};
 pub fn router() -> Router {
     Router::new()
         .push(
+            Router::with_path("api/hafleet/v2/{fleet}/{operation}")
+                .hoop(salvo::size_limiter::max_size(1024 * 1024))
+                .get(machine)
+                .post(machine),
+        )
+        .push(
             Router::with_path("api/fleet/v2/{fleet}/{operation}")
                 .hoop(salvo::size_limiter::max_size(1024 * 1024))
                 .get(machine)

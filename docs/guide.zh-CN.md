@@ -117,6 +117,24 @@ Palpo 管理接口还在宿主边界检查 Pasion 实时 introspection 与精确
 前端来源和上游许可证信息见根目录 `NOTICE`。
 复制的 Padmin 基于提交 `83d4567470ada808b89914aa0c786cdc3a7ac89a`。
 
+## 客户端 Pasion 登录与自助接入
+
+`hagency-client` 可以通过 Pasion 登录后自动创建自己的 Fleet，保存配置并启动 outbound 连接，无需手工下载和导入。首次账号绑定仍需本地访问权限；后续登录固定为同一服务器和账号。
+
+在 Hagency 自己的配置中开放自助接入（默认关闭）：
+
+```toml
+[fleet_access]
+allow_self_service = true
+max_per_user = 3
+```
+
+管理员只需开放政策，无需逐次批准普通用户的接入。每个本地安装通过固定安装 ID 幂等创建自己的 Fleet，每个 Fleet 对应一个 App Service；注册权限和 Pasion 共享密钥留在服务器。关闭自助接入会阻止新接入，不会撤销已经配置的连接。
+
+原生接口位于 `/_hagency/client/v1/`：公开 discovery；identity 验证 Pasion 用户 token；fleets 创建并返回本人的配置；fleets/{id}/connect 自动验证接入。认证接口只接受原生 Bearer 请求，不接受浏览器 Cookie/Origin。创建只接受 installationId/name，所有者由验证后的身份决定，不授予 Matrix 管理员权限。
+
+客户端的人类会话最长 15 分钟，最多每 30 秒复验一次 token，重启后重新登录。机器连接凭据独立于浏览器登录，token 撤销会终止本地登录访问，但不会自动撤销 Fleet。停用 Fleet 使用服务器的连接管理。
+
 ## 组件配置与首次管理员
 
 配置由各组件分别持有：
@@ -258,6 +276,12 @@ cargo test --locked
 cargo build --example admin_contract_server --locked
 cargo test --locked -p hagency-frontend --target <native-host-triple>
 node tests/http-contract.mjs
+node tests/native-client-contract.mjs
+# Real client/server enrollment with controlled Pasion/Matrix peers:
+CONTRACT_SERVER=/absolute/path/to/admin_contract_server \
+HAGENCY_CLIENT=/absolute/path/to/hagency \
+CONSOLE_ASSETS=/absolute/path/to/client-console-assets \
+node tests/client-enrollment.e2e.mjs
 # 如果编译产物位于其他目录：
 CONTRACT_SERVER=/absolute/path/to/admin_contract_server node tests/http-contract.mjs
 ```

@@ -16,3 +16,8 @@ public_dir = "../../resources/frontend/public"
 # [action_notifications]
 # bot_mxid = "@notifications:palpo.instance"
 # token_file = "../../secrets/notifications-token"
+
+# Allow ordinary Pasion users to create their own outbound Fleets.
+[fleet_access]
+allow_self_service = false
+max_per_user = 3

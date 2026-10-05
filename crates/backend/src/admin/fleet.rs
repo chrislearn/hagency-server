@@ -3,6 +3,56 @@ use super::outbound::*;
 use super::*;
 use reqwest::Method;
 
+/// Normalize deprecated Hafleet URLs to the canonical Fleet handlers.
+pub(crate) fn canonical_path(path: &str) -> String {
+    for (old, current) in [
+        ("/api/hafleets", "/api/fleets"),
+        ("/api/my/hafleets", "/api/my/fleets"),
+        ("/api/hafleet/v2", "/api/fleet/v2"),
+        ("/_hagency/client/v1/hafleets", "/_hagency/client/v1/fleets"),
+    ] {
+        if path == old || path.strip_prefix(old).is_some_and(|s| s.starts_with('/')) {
+            return path.replacen(old, current, 1);
+        }
+    }
+    path.to_owned()
+}
+
+/// Old management URLs keep their aliases; canonical Fleet responses and all
+/// machine credentials retain only the original Fleet wire keys.
+pub(crate) fn legacy_management_view(mut value: Value) -> Value {
+    fn record(value: &mut Value) {
+        let Some(object) = value.as_object_mut() else {
+            return;
+        };
+        for (current, old) in [("fleetId", "hafleetId"), ("fleetName", "hafleetName")] {
+            if let Some(v) = object.get(current).cloned() {
+                object.insert(old.into(), v);
+            }
+        }
+    }
+    record(&mut value);
+    for key in ["project", "request"] {
+        if let Some(v) = value.get_mut(key) {
+            record(v);
+        }
+    }
+    for key in ["projects", "requests", "events"] {
+        if let Some(rows) = value.get_mut(key).and_then(Value::as_array_mut) {
+            for row in rows {
+                record(row);
+            }
+        }
+    }
+    if let Some(object) = value.as_object_mut() {
+        for (current, old) in [("fleet", "hafleet"), ("fleets", "hafleets")] {
+            if let Some(v) = object.get(current).cloned() {
+                object.insert(old.into(), v);
+            }
+        }
+    }
+    value
+}
 pub(crate) fn public_fleet(f: &Value) -> Value {
     let mut out = f.clone();
     let m = out.as_object_mut().unwrap();

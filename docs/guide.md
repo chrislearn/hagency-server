@@ -154,6 +154,24 @@ workflow. It is not the default unified deployment.
 Frontend source provenance and upstream licensing are recorded in `NOTICE`
 (Padmin commit `83d4567470ada808b89914aa0c786cdc3a7ac89a`).
 
+## Native client login and self-service enrollment
+
+`hagency-client` signs in with Pasion, creates its own Fleet, saves the returned configuration and starts outbound transport automatically. First binding requires local operator access; later logins are pinned to the same server and account.
+
+Enable enrollment in Hagency's own configuration (disabled by default):
+
+```toml
+[fleet_access]
+allow_self_service = true
+max_per_user = 3
+```
+
+The administrator enables the policy once; ordinary users need no per-install approval. A stable installation ID makes creation idempotent. Each Fleet has its own App Service. Registration authority and the Pasion shared secret stay server-side. Disabling enrollment prevents new enrollments and does not revoke existing connections.
+
+Native API under `/_hagency/client/v1/`: public discovery; identity verifies the user's Pasion bearer; fleets creates and returns that user's configuration; fleets/{id}/connect verifies connectivity. Authenticated native requests reject browser cookies and Origin. Creation accepts only installationId/name and derives ownership from verified identity; it never grants Matrix administrator rights.
+
+Human local sessions last at most 15 minutes, revalidate tokens at most every 30 seconds, and require login after restart. Machine credentials are independent of browser login: human token revocation ends local login access, while Fleet retirement is a separate server management action.
+
 ## Configuration and initial administrator
 
 Configuration is split into files owned by each component:
@@ -339,6 +357,12 @@ cargo test --locked
 cargo build --example admin_contract_server --locked
 cargo test --locked -p hagency-frontend --target <native-host-triple>
 node tests/http-contract.mjs
+node tests/native-client-contract.mjs
+# Real client/server enrollment with controlled Pasion/Matrix peers:
+CONTRACT_SERVER=/absolute/path/to/admin_contract_server \
+HAGENCY_CLIENT=/absolute/path/to/hagency \
+CONSOLE_ASSETS=/absolute/path/to/client-console-assets \
+node tests/client-enrollment.e2e.mjs
 # If target artifacts are elsewhere:
 CONTRACT_SERVER=/absolute/path/to/admin_contract_server node tests/http-contract.mjs
 ```

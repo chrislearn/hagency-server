@@ -24,6 +24,9 @@ struct Inner {
 
 /// Clones share the same writer and state, including cancellation-safe commits.
 /// A database advisory lock excludes another hagency-server process.
+/// Historical `fleets`, `fleet` and `fleetId` storage/wire keys are retained;
+/// the domain and management UI name is Fleet. Renaming a payload key would
+/// invalidate existing content digests, grants and downloaded credentials.
 #[derive(Clone)]
 pub struct Store {
     inner: Arc<Mutex<Inner>>,

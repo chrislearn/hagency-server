@@ -129,12 +129,26 @@ try {
   });
   const legacyInput = { requestId:'legacy-1',name:'Legacy',ownerMxid:'@owner:example.test',transportMode:'callback',callbackUrl:fixtureOrigin + '/matrix' };
   const create = await api('/fleets',{method:'POST',body:legacyInput,session:admin}); assert.equal(create.status,201,JSON.stringify(create.data)); const legacy = create.data.fleet;
-  await check('fleet install, content-bound retry, token redaction and owner isolation',async()=>{
+  await check('Fleet install, content-bound retry, token redaction and owner isolation',async()=>{
     assert.equal((await api('/fleets',{method:'POST',body:legacyInput,session:admin})).data.fleet.id,legacy.id);
     assert.equal((await api('/fleets',{method:'POST',body:{...legacyInput,name:'Changed'},session:admin})).status,409);
     assert.equal((await api('/my/fleets/' + legacy.id + '/pair',{method:'POST',body:{},session:other})).status,404);
     const pair = await api('/my/fleets/' + legacy.id + '/pair',{method:'POST',body:{},session:owner});assert.equal(pair.status,200);assert.ok(pair.data.registration.as_token);
     assert.equal(JSON.stringify((await api('/fleets',{session:admin})).data).includes(pair.data.registration.as_token),false);
+  });
+  await check('Fleet management names preserve owner isolation and exact legacy credentials',async()=>{
+    assert.equal((await api('/hafleets',{session:owner})).status,403);
+    const renamed=await api('/hafleets',{method:'POST',body:legacyInput,session:admin});
+    assert.equal(renamed.status,201);assert.equal(renamed.data.fleet.id,legacy.id);assert.equal(renamed.data.hafleet.id,legacy.id);
+    assert.equal((await api('/my/hafleets',{session:owner})).data.hafleets[0].id,legacy.id);
+    assert.equal((await api('/my/hafleets/'+legacy.id+'/pair',{method:'POST',body:{},session:other})).status,404);
+    const oldPair=await api('/my/fleets/'+legacy.id+'/pair',{method:'POST',body:{},session:owner});
+    const newPair=await api('/my/hafleets/'+legacy.id+'/pair',{method:'POST',body:{},session:owner});
+    assert.deepEqual(newPair.data,oldPair.data);assert.equal(newPair.data.hafleetId,undefined);
+    assert.equal(JSON.stringify((await api('/hafleets',{session:admin})).data).includes(oldPair.data.registration.as_token),false);
+    const canonical=await api('/my/fleets',{session:owner});
+    assert.equal(canonical.data.fleets[0].id,legacy.id);
+    assert.equal(canonical.data.hafleets,undefined);
   });
   await check('managed identity create, immutable update and verified retirement',async()=>{
     const path='/fleets/' + legacy.id + '/agents'; const a=await api(path,{method:'POST',body:{agentId:'code_01',displayName:'Code',role:'coding',approvedRequestId:'approved-1'},session:admin});assert.equal(a.status,201,JSON.stringify(a.data));assert.equal(a.data.agent.matrixIdentity,'active');
@@ -146,6 +160,9 @@ try {
   await check('exact legacy Matrix probe, project and private approval room',async()=>{
     const c=await api('/my/fleets/'+legacy.id+'/connect',{method:'POST',body:{},session:owner});assert.equal(c.status,200,JSON.stringify(c.data));assert.equal(c.data.readiness.ready,true);
     const p=await api('/projects',{method:'POST',body:{requestId:'project-1',fleetId:legacy.id,name:'Project'},session:owner});assert.equal(p.status,201,JSON.stringify(p.data));project=p.data.project;assert.equal(project.ownerApproval,'ready');
+    const same=await api('/projects',{method:'POST',body:{requestId:'project-1',hafleetId:legacy.id,name:'Project'},session:owner});
+    assert.equal(same.status,201);assert.equal(same.data.project.id,project.id);assert.equal(same.data.project.fleetId,legacy.id);
+    assert.equal((await api('/projects',{method:'POST',body:{requestId:'project-1',hafleetId:legacy.id,fleetId:'different',name:'Project'},session:owner})).data.code,'ambiguous_fleet');
     f.putState(f.rooms.get(project.roomId),'m.room.member','@other:example.test',{membership:'join'},'@owner:example.test');
     const view=await api('/projects',{session:other});assert.equal(view.status,200);assert.equal(view.data.projects[0].ownerDmRoomId,undefined);
   });
@@ -166,8 +183,11 @@ try {
     assert.equal((await send(body)).status,200);assert.equal((await send(body)).status,200);assert.equal((await send({events:[{type:'different'}]})).status,409);
     const headers={Authorization:'Bearer '+pair.transport.token,'X-Hagency-Generation':String(pair.transport.generation)};
     assert.equal((await api('/fleet/v2/'+outbound.id+'/poll?lane=matrix&consumer='+randomUUID()+'&wait=0',{headers:{...headers,Origin:base}})).status,403);
-    const poll=await api('/fleet/v2/'+outbound.id+'/poll?lane=matrix&consumer='+randomUUID()+'&wait=0',{headers});assert.equal(poll.status,200,JSON.stringify(poll.data));assert.equal(poll.data.delivery.id,'tx-1');
+    const poll=await api('/hafleet/v2/'+outbound.id+'/poll?lane=matrix&consumer='+randomUUID()+'&wait=0',{headers});assert.equal(poll.status,200,JSON.stringify(poll.data));assert.equal(poll.data.delivery.id,'tx-1');
     const ack=await fetch(base+'/api/fleet/v2/'+outbound.id+'/ack',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({lane:'matrix',id:'tx-1',token:poll.data.delivery.token})});assert.equal(ack.status,200);
+    const canonicalPoll=await api('/fleet/v2/'+outbound.id+'/poll?lane=matrix&consumer='+randomUUID()+'&wait=0',{headers});
+    assert.equal(canonicalPoll.status,200);assert.equal(canonicalPoll.data.delivery,null);
+    assert.equal((await api('/fleet/v2/'+outbound.id+'/poll?lane=matrix&consumer='+randomUUID()+'&wait=0',{headers:{...headers,Origin:base}})).status,403);
     const update={v:2,generation:pair.transport.generation,sequence:1,heartbeat:true,capabilities:{v:1,fleetId:outbound.id,serverName:'example.test',representativeMxid:outbound.representativeMxid,approvalBotMxid:'@approvalbot:example.test',offers:[{role:'coding'}]}};
     const publish=async body=>fetch(base+'/api/fleet/v2/'+outbound.id+'/updates',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body)});
     assert.equal((await publish(update)).status,200);assert.equal((await publish(update)).status,200);assert.equal((await publish({...update,heartbeat:false})).status,400);assert.equal((await publish({...update,statuses:[]})).status,409);

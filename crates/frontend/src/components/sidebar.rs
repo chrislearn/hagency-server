@@ -147,8 +147,8 @@ fn build_sections(
                 icon: "scroll-text",
             },
             NavItem {
-                title: "My Hagencys".into(),
-                route: Route::HagencyOwned {},
+                title: "My Fleets".into(),
+                route: Route::HagencyFleets {},
                 icon: "server",
             },
         ],
@@ -160,7 +160,7 @@ fn build_sections(
         label: "Hagency administration".into(),
         items: vec![
             NavItem {
-                title: "Hagency connections".into(),
+                title: "Fleet connections".into(),
                 route: Route::HagencyConnections {},
                 icon: "link",
             },

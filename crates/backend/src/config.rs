@@ -25,6 +25,8 @@ pub struct HostConfig {
     pub read_timeout_ms: Option<u64>,
     #[serde(default)]
     pub queue: QueueConfig,
+    #[serde(default, alias = "hafleet_access")]
+    pub fleet_access: FleetAccessConfig,
     #[serde(default)]
     pub account_config: Option<PathBuf>,
     #[serde(default)]
@@ -34,6 +36,21 @@ pub struct HostConfig {
     pub palpo_config: PathBuf,
     #[serde(default)]
     pub action_notifications: Option<ActionNotificationsConfig>,
+}
+/// Server policy for ordinary users enrolling their own local clients.
+#[derive(Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FleetAccessConfig {
+    pub allow_self_service: bool,
+    pub max_per_user: usize,
+}
+impl Default for FleetAccessConfig {
+    fn default() -> Self {
+        Self {
+            allow_self_service: false,
+            max_per_user: 3,
+        }
+    }
 }
 /// An ordinary Pasion/Matrix account sends minimal private action notices.
 #[derive(Clone, Deserialize)]
@@ -195,6 +212,10 @@ impl Config {
     }
     pub fn validate(&self) -> anyhow::Result<()> {
         origin(&self.public_origin, true)?;
+        anyhow::ensure!(
+            self.fleet_access.max_per_user > 0,
+            "fleet_access.max_per_user must be positive"
+        );
         for url in &self.callback_origins {
             origin(url, false)?;
         }

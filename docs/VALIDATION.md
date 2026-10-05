@@ -432,3 +432,26 @@ application-path references, and passes whitespace checks. Palpo Rust tests
 were not rerun for that source/documentation-only cleanup. The PR remains draft
 pending the replacement release and client/state acceptance. Draft features for
 online association/delegation are not advertised as implemented.
+
+## Fleet terminology (2026-10-05)
+
+- Both hagency-client and hagency-server now use Fleet in UI, source, native
+  enrollment APIs, configuration examples and bilingual documentation.
+- Workspace library tests: eight passed; the dedicated PostgreSQL persistence
+  check was skipped. Operations HTTP workflows: 16 passed; its dedicated
+  PostgreSQL check was skipped.
+- Thirteen management HTTP contract groups passed, including canonical Fleet
+  responses, deprecated Hafleet paths/inputs, owner isolation, conflict rejection
+  and byte-identical pairing credentials.
+- Native enrollment contract passed with `[fleet_access]` and its old
+  `[hafleet_access]` alias, quota, idempotent credentials and owner isolation.
+- Client PKCE/owner binding/revocation regression, both Rust Clippy checks and
+  both frontend release builds passed. Existing frontend unused-code warnings
+  remain.
+- Actual Rust client/server integration with controlled Pasion/Matrix peers
+  passed: enrollment, automatic import, outbound poll, App Service delivery,
+  exact probe receipt and reception verification.
+- A controlled browser fixture showed **My Fleets** at `/hagency/fleets`,
+  **Fleet connections**, and the existing Matrix/Padmin navigation.
+- Persisted IDs, registrations, tokens, protocol keys and audit history were
+  retained; no database migration is needed.

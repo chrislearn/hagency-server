@@ -8,9 +8,9 @@
 
 | 业务流程 | Rust/Dioxus 实现 | 验证方式 |
 | --- | --- | --- |
-| 提供方授权、隔离 App Service、可恢复安装、漂移检测 | 后端 admin/fleet.rs；前端 Hagency connections | HTTP 契约；真实 Matrix 集成 |
+| 提供方授权、隔离 App Service、可恢复安装、漂移检测 | 后端 admin/fleet.rs；前端 Fleet connections | HTTP 契约；真实 Matrix 集成 |
 | Outbound 迁移/轮换、队列限制、租约、ACK、在线与当前 generation 证明 | 后端 admin/outbound.rs；连接及容量检查 | HTTP 契约；真实 Matrix 集成 |
-| 仅 owner 可配对/下载配置、精确事件回执及 reception 成员关系 | 后端 admin/workflow.rs；My Hagencys | HTTP 契约；真实 Matrix 集成 |
+| 仅 owner 可配对/下载配置、精确事件回执及 reception 成员关系 | 后端 admin/workflow.rs；My Fleets | HTTP 契约；真实 Matrix 集成 |
 | 创建项目或绑定已有房间、加密私有审批房间、owner/member 权限 | 后端 admin/workflow.rs；Projects | HTTP 契约；真实 Matrix 集成 |
 | 选择发布的资源和角色、Agent 命名、token/每日配额、持久化申请/重试 | 后端 admin/workflow.rs；Request an agent | HTTP 契约；前端角色/资源检查 |
 | 提供方决策、真实运行配置和准备阶段、过期状态、真正入房后才可用 | 后端 admin/workflow.rs；Agent requests | HTTP 契约；真实 Matrix 集成；就绪分组回归 |

@@ -111,7 +111,7 @@ pub fn RenewalWarnings(fleets: Vec<Value>) -> Element {
     rsx! { for fleet in fleets.iter().filter(|f| f["renewalError"].is_string()) {
         div { class:"hg-notice hg-error",role:"status",
             {format!("Could not renew {}: {}. Automatic retry waits at least one minute while this page is visible.",text(fleet,"name"),text(fleet,"renewalError"))}
-            dioxus::prelude::Link { to:crate::router::Route::HagencyOwned {},class:"hg-link","Verify connection in My Hagencys" }
+            dioxus::prelude::Link { to:crate::router::Route::HagencyFleets {},class:"hg-link","Verify connection in My Fleets" }
         }
     } }
 }

@@ -1,6 +1,7 @@
 mod accounts;
 mod api;
 mod fleet;
+mod native_client;
 mod outbound;
 mod store;
 mod upstream;
