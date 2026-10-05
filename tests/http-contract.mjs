@@ -114,6 +114,19 @@ try {
     assert.equal((await api('/projects',{method:'POST',body:{},session:owner,headers:{'X-CSRF-Token':'bad'}})).data.code,'csrf_forbidden');
     assert.equal((await api('/session',{session:admin,headers:{Host:'unexpected.invalid'}})).status,403);
   });
+  await check('Hagency Operations web adapter and native endpoint retain separate authentication envelopes',async()=>{
+    const body={service:'hagency.inbox.list',args:{view:'all'}};
+    assert.equal((await api('/operations/call',{method:'POST',body,session:owner})).status,200);
+    assert.equal((await api('/operations/call',{method:'POST',body})).status,401);
+    assert.equal((await api('/operations/call',{method:'POST',body,session:owner,headers:{'X-CSRF-Token':'bad'}})).status,403);
+    assert.equal((await api('/operations/call',{method:'POST',body,session:owner,headers:{Origin:'https://evil.invalid'}})).status,403);
+    const input={appId:'im.hagency.operations',bundleDigest:'a'.repeat(64),services:['hagency.inbox.list']};
+    const native=await fetch(base+'/_hagency/miniapp/v1/session',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer owner-secret'},body:JSON.stringify(input)});
+    assert.equal(native.status,200,await native.clone().text());
+    const session=await native.json();assert.ok(session.sessionToken);assert.ok(!JSON.stringify(session).includes('owner-secret'));
+    assert.equal((await fetch(base+'/_hagency/miniapp/v1/session',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer owner-secret',Origin:base},body:JSON.stringify(input)})).status,403);
+    assert.equal((await fetch(base+'/_palpo/miniapp/v1/session',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer owner-secret'},body:JSON.stringify({...input,appId:'im.palpo.operations',services:['palpo.inbox.list']})})).status,200);
+  });
   const legacyInput = { requestId:'legacy-1',name:'Legacy',ownerMxid:'@owner:example.test',transportMode:'callback',callbackUrl:fixtureOrigin + '/matrix' };
   const create = await api('/fleets',{method:'POST',body:legacyInput,session:admin}); assert.equal(create.status,201,JSON.stringify(create.data)); const legacy = create.data.fleet;
   await check('fleet install, content-bound retry, token redaction and owner isolation',async()=>{

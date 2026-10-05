@@ -32,6 +32,15 @@ pub struct HostConfig {
     #[serde(default)]
     pub pasion_config: Option<PathBuf>,
     pub palpo_config: PathBuf,
+    #[serde(default)]
+    pub action_notifications: Option<ActionNotificationsConfig>,
+}
+/// An ordinary Pasion/Matrix account sends minimal private action notices.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionNotificationsConfig {
+    pub bot_mxid: String,
+    pub token_file: PathBuf,
 }
 /// Fully loaded runtime configuration; files stay owned by their components.
 #[derive(Clone)]
@@ -98,6 +107,9 @@ impl Config {
         .flatten()
         {
             *p = resolve(base, p);
+        }
+        if let Some(notifications) = &mut host.action_notifications {
+            notifications.token_file = resolve(base, &notifications.token_file);
         }
         host.data_dir = resolve(base, &host.data_dir);
         host.palpo_config = resolve(base, &host.palpo_config)
@@ -206,6 +218,18 @@ impl Config {
             !self.matrix.admin.console_automatic,
             "embedded Palpo does not support an automatic interactive console"
         );
+        if let Some(n) = &self.action_notifications {
+            let bot: hagency_contract::MatrixUserId = n.bot_mxid.clone().try_into()?;
+            let server = self.matrix.server_name.to_string().try_into()?;
+            anyhow::ensure!(
+                bot.belongs_to(&server),
+                "notification account must belong to this Matrix server"
+            );
+            anyhow::ensure!(
+                n.token_file.is_file(),
+                "notification token_file must be an existing file"
+            );
+        }
         let admin_db = postgres_database(&self.database_url, "database_url")?;
         let matrix_db = postgres_database(&self.matrix.db.url, "matrix.db.url")?;
         anyhow::ensure!(

@@ -72,3 +72,5 @@ docker compose up -d server
 
 详细配置、注册、源码开发和迁移说明：
 [中文](docs/guide.zh-CN.md) · [English](docs/guide.md)。
+
+Hagency 业务架构与迁移：[中文](docs/OPERATIONS.zh-CN.md) · [English](docs/OPERATIONS.md)。

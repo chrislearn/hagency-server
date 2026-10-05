@@ -9,6 +9,7 @@ All guide commands run from the repository root.
 | Configuration, accounts, deployment, development and migration | [Guide](guide.md) | [配置与开发指南](guide.zh-CN.md) |
 | Palpo web-admin workflows and unified Pasion accounts | [Feature comparison](WEB_ADMIN_PARITY.md) | [功能对照](WEB_ADMIN_PARITY.zh-CN.md) |
 | Historical checks and verification limits | [Validation record](VALIDATION.md) | [验证记录](VALIDATION.zh-CN.md) |
+| Hagency business ownership, coordinator workflows and migration | [Operations](OPERATIONS.md) | [业务架构与迁移](OPERATIONS.zh-CN.md) |
 
 Guide shortcuts: [configuration](guide.md#configuration-and-initial-administrator),
 [Docker](guide.md#compose-deployment), [development](guide.md#development),

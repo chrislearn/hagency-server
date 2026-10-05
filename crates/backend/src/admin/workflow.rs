@@ -110,7 +110,7 @@ impl Admin {
             filtered.push(out);
         }
         let t = now();
-        f["capabilities"] = json!({"v":1,"fleetId":data["fleetId"],"serverName":data["serverName"],"representativeMxid":data["representativeMxid"],"approvalBotMxid":bot,"offers":filtered,"observedAt":t});
+        f["capabilities"] = json!({"v":1,"fleetId":data["fleetId"],"serverName":data["serverName"],"representativeMxid":data["representativeMxid"],"approvalBotMxid":bot,"coordinatorApprovalV1":data["coordinatorApprovalV1"]==true,"offers":filtered,"observedAt":t});
         f["capabilityRead"] = json!({"state":"current","observedAt":t});
         Ok(())
     }

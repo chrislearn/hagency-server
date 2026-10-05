@@ -1,0 +1,27 @@
+[package]
+name = "hagency-operations"
+description = "Hagency coordinator workflows, native client sessions and durable operations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+hagency-contract.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+chrono.workspace = true
+url.workspace = true
+subtle.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+salvo.workspace = true
+diesel.workspace = true
+diesel-async.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

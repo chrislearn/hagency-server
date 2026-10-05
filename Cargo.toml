@@ -13,6 +13,9 @@ repository = "https://github.com/chrislearn/hagency-server"
 publish = false
 
 [workspace.dependencies]
+hagency-contract = { path = "crates/hagency-contract" }
+hagency-operations = { path = "crates/operations" }
+thiserror = "2"
 # Palpo embedding API; pin until the upstream PR is merged.
 palpo = { git = "https://github.com/palpo-im/palpo.git", rev = "c8568d9844a6be0a3172d98d7c9810e3a1f7521c" }
 pasion-backend = { git = "https://github.com/meldry-com/pasion.git", rev = "03cd9f94c0c0593c3979de68a0b11ee443f23933", features = ["cedar"] }
@@ -26,7 +29,7 @@ rand_core = "0.6"
 tracing-opentelemetry = { version = "0.33", default-features = false }
 opentelemetry = { version = "0.32", features = ["trace"] }
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
-salvo = { version = "1.0.0", features = ["serve-static", "test"] }
+salvo = { version = "1.0.0", features = ["serve-static", "test", "affix-state", "size-limiter"] }
 tokio = { version = "1.52", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

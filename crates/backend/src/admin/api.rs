@@ -9,6 +9,7 @@ use url::Url;
 pub struct Admin {
     pub(crate) store: Arc<Store>,
     pub(crate) palpo: Upstream,
+    pub(crate) operations: Arc<hagency_operations::api::App>,
     pub(crate) server_name: String,
     pub(crate) public_origin: Url,
     pub(crate) callback_origins: Vec<String>,
@@ -44,8 +45,26 @@ impl Admin {
                 .as_ref()
                 .and_then(|c| c["adminToken"].as_str().map(str::to_string)),
         };
+        let operations = hagency_operations::api::App::new(
+            hagency_operations::matrix::Matrix::new(
+                conf.internal_origin().as_str(),
+                conf.matrix.server_name.to_string().try_into()?,
+            )?,
+            store.shared.clone(),
+            conf.public_origin.as_str(),
+            900000,
+        )
+        .await?
+        .with_transport(conf.public_origin.as_str(), conf.internal_origin().as_str())?
+        .with_limits(hagency_operations::outbound::Limits {
+            lease_ms: conf.queue.lease_ms as u64,
+            records: conf.queue.max_records as u64,
+            pending: conf.queue.max_pending as u64,
+            bytes: conf.queue.max_bytes as u64,
+        })?;
         let this = Self {
             store,
+            operations,
             palpo: Upstream::new(conf.internal_origin()),
             server_name: conf.matrix.server_name.to_string(),
             public_origin: conf.public_origin.clone(),
@@ -94,12 +113,45 @@ impl Admin {
         this.account_setup().await?;
         Ok(this)
     }
-    pub fn router(&self) -> Router {
-        Router::new().push(Router::with_path("api/{**path}").goal(self.clone()))
+    pub fn start_notifications(
+        &self,
+        conf: &Config,
+    ) -> anyhow::Result<Option<tokio::task::JoinHandle<()>>> {
+        let Some(n) = &conf.action_notifications else {
+            return Ok(None);
+        };
+        let worker = hagency_operations::notifications::Notifications::new(
+            self.operations.clone(),
+            n.bot_mxid.clone(),
+            std::fs::read_to_string(&n.token_file)?.trim().to_owned(),
+            conf.public_origin.to_string(),
+        )?;
+        Ok(Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(15));
+            loop {
+                interval.tick().await;
+                if let Err(error) = worker.tick().await {
+                    tracing::warn!(code=%error.code,"action notification delivery deferred");
+                }
+            }
+        })))
     }
-    pub fn with_upstream(mut self, url: Url) -> Self {
+    pub fn router(&self) -> Router {
+        Router::new()
+            .push(hagency_operations::api::miniapp_router(
+                self.operations.clone(),
+            ))
+            .push(Router::with_path("api/{**path}").goal(self.clone()))
+    }
+    pub fn with_upstream(mut self, url: Url) -> anyhow::Result<Self> {
+        let operations = Arc::get_mut(&mut self.operations)
+            .ok_or_else(|| anyhow::anyhow!("configure the upstream before cloning Admin"))?;
+        operations.matrix = hagency_operations::matrix::Matrix::new(
+            url.as_str(),
+            self.server_name.clone().try_into()?,
+        )?;
         self.palpo = Upstream::new(url);
-        self
+        Ok(self)
     }
     async fn rate(&self, key: String, max: u32, window: i64) -> Result<()> {
         let mut rates = self.rates.lock().await;
@@ -580,6 +632,25 @@ impl Admin {
         }
         let actor = session.user_id.as_str();
         let token = session.token.as_str();
+        if path == "/api/operations/call" && method == "POST" {
+            let input = Self::body(req, 16384).await?;
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Call {
+                service: String,
+                args: Value,
+            }
+            let call: Call = serde_json::from_value(input)
+                .map_err(|_| err(400, "invalid_arguments", "A service and args are required."))?;
+            // Origin, cookie, CSRF and current Matrix identity have already
+            // been checked. Business policy is shared with the native adapter.
+            return Ok((
+                200,
+                self.operations
+                    .browser_call(token, &call.service, call.args)
+                    .await?,
+            ));
+        }
         if method == "GET"
             && ["/api/requests", "/api/catalog", "/api/projects"].contains(&path.as_str())
         {

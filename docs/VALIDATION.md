@@ -389,3 +389,46 @@ invoked. README prerequisites and both detailed guides were corrected, and the
 unused `nodejs` installation was removed from the Docker web-tools stage.
 Node.js is needed only for `tests/*.mjs`, not for frontend builds or server
 runtime. The full Docker image was not rebuilt for this dependency removal.
+
+## Hagency contract and Operations migration (2026-10-05)
+
+Migrated the implemented contract and Operations workflow from Palpo draft #508
+at `985c7242c2074b7cb0561c14c7c79dc6ed1a2bf7` into local workspace crates.
+Operations shares the existing Hagency PostgreSQL state and writer with the
+legacy fleet API. No fourth operational database or SQLite service was added.
+The ownership, compatibility and remaining integration work are documented in
+[Operations](OPERATIONS.md).
+
+Executed checks:
+
+- Contract/Operations: 40 passing tests. The optional PostgreSQL test also passed
+  against a separate empty database: competing decisions, rollback, process
+  exclusion, restart, exact retries and preservation of legacy extensions and
+  delivery leases. The temporary test database was removed.
+- Backend: eight passing unit/configuration tests; the existing optional
+  PostgreSQL regression was not rerun. All twelve HTTP contract groups passed,
+  including the browser adapter, native endpoint aliases and existing fleet APIs.
+- Formatting and strict all-target Clippy passed for contract, Operations and
+  backend. The five xtask tests passed. Development watches now include both
+  new crates.
+- Frontend WASM check and production bundling passed. The 49 existing frontend
+  unused/dead-code warnings remain; the macOS backend linker still emits its
+  existing large `__eh_frame` warning.
+- Updated the local development process and verified `/healthz`. Existing
+  Pasion administrator sign-in reached Dashboard with all Padmin navigation
+  retained; `/hagency/inbox` loaded its empty state successfully.
+- Notification tests used a loopback Matrix stub, covering private-room checks,
+  lost-reply transaction deduplication, metadata-only notices and seen/snooze.
+  The optional worker is disabled in the development configuration; no real
+  notification messages were sent.
+
+The Docker image was not rebuilt for this migration. Live hagency-rs delegation,
+Agent provisioning/chat and Codex/Claude quota execution were not exercised.
+Palpo cleanup was committed on a separate branch and submitted as draft
+[PR #512](https://github.com/palpo-im/palpo/pull/512), removing the old application
+and its CI with bilingual migration guidance. Its diff leaves all Rust sources,
+Cargo manifests/lockfile and Matrix tests/deployments unchanged, has no dangling
+application-path references, and passes whitespace checks. Palpo Rust tests
+were not rerun for that source/documentation-only cleanup. The PR remains draft
+pending the replacement release and client/state acceptance. Draft features for
+online association/delegation are not advertised as implemented.

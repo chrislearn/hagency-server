@@ -376,6 +376,29 @@ impl Admin {
         generation: &str,
         input: &Value,
     ) -> Result<Value> {
+        let snapshot = self.store.snapshot().await;
+        let coordinator_status = input["statuses"].as_array().is_some_and(|rows| {
+            rows.iter().any(|r| {
+                snapshot["rustWorkflows"]["actions"]
+                    .as_object()
+                    .is_some_and(|actions| {
+                        actions.values().any(|a| {
+                            a["request"]["request"]["id"] == r["requestId"]
+                                && a["request"]["request"]["serverEngagementId"] == id
+                        })
+                    })
+            })
+        });
+        if input.get("coordinatorUpdates").is_some() || coordinator_status {
+            let generation = generation
+                .parse::<u64>()
+                .map_err(|_| err(409, "generation_conflict", "Use the current generation."))?;
+            return self
+                .operations
+                .apply_updates(id, token, generation, input)
+                .await
+                .map_err(Into::into);
+        }
         let mut f = self.authenticate(id, token, generation, false).await?;
         let seq = input["sequence"]
             .as_u64()

@@ -19,3 +19,10 @@ Copyright Meldry Team and contributors, licensed under AGPL-3.0-or-later.
 Source and upstream license:
 https://github.com/meldry-com/padmin/tree/83d4567470ada808b89914aa0c786cdc3a7ac89a
 https://github.com/meldry-com/padmin/blob/83d4567470ada808b89914aa0c786cdc3a7ac89a/LICENSE
+
+Hagency coordinator contract and Operations derive from Palpo PR #508,
+Copyright Palpo contributors and ymote, licensed under Apache-2.0.
+Source snapshot (contract, Operations, tests):
+https://github.com/palpo-im/palpo/tree/985c7242c2074b7cb0561c14c7c79dc6ed1a2bf7
+The Matrix action notification worker also derives from the web-admin
+notification design merged in PR #506 in that source snapshot.

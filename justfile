@@ -62,3 +62,12 @@ check-tools:
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
     cargo test --locked --manifest-path xtask/Cargo.toml
+
+# Validate the shared business protocol and native Operations HTTP workflows.
+check-operations:
+    cargo test --locked -p hagency-contract -p hagency-operations
+    cargo clippy --locked -p hagency-contract -p hagency-operations --all-targets -- -D warnings
+
+# Import a reviewed authority projection while the server is stopped.
+import-authority file config="config/dev/hagency.toml":
+    cargo run --locked -p hagency-server -- --config "$2" --import-authority "$1"

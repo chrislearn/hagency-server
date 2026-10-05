@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let url = std::env::var("FIXTURE_ORIGIN")?;
     let admin = Admin::new(&conf, Arc::new(Store::memory()))
         .await?
-        .with_upstream(url.parse()?);
+        .with_upstream(url.parse()?)?;
     let worker = conf
         .account_config
         .as_ref()

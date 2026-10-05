@@ -8,6 +8,8 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+hagency-contract.workspace = true
+hagency-operations.workspace = true
 palpo.workspace = true
 pasion-backend.workspace = true
 pasion-config.workspace = true

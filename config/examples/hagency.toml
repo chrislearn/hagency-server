@@ -11,3 +11,8 @@ public_dir = "../../resources/frontend/public"
 # callback_origins = ["http://127.0.0.1:3010"]
 # account_config = "../../secrets/account-approval.json"
 # retirement_admin_token_file = "../../secrets/agent-admin-token"
+
+# Optional private Inbox notifications from an ordinary Pasion/Matrix account.
+# [action_notifications]
+# bot_mxid = "@notifications:palpo.instance"
+# token_file = "../../secrets/notifications-token"

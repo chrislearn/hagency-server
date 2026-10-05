@@ -200,3 +200,23 @@ Rust 1.99.0 下执行的检查：
 禁用 Node.js/npm/npx 命令后，`just prepare-frontend` 和 `just prepare-pasion` 均完成真实 release/WASM 打包，没有调用 Node 工具。
 已修正两版 README 的依赖清单及详细指南，删除 Docker web-tools 阶段中未使用的 `nodejs` 安装。
 Node.js 仅用于 `tests/*.mjs`，前端构建和服务器运行不需要它。本次删除依赖未重新构建完整 Docker 镜像。
+
+## Hagency 协议与 Operations 迁移（2026-10-05）
+
+将 Palpo 草稿 #508 的 `985c7242c2074b7cb0561c14c7c79dc6ed1a2bf7` 中已实现的协议与 Operations 工作流迁入本项目 workspace。
+Operations 和原 fleet API 共用现有 Hagency PostgreSQL 状态与写锁；没有增加第四个业务数据库或 SQLite 服务。
+归属、兼容方式及剩余整合边界见 [Operations 说明](OPERATIONS.zh-CN.md)。
+
+执行的验证：
+
+- 协议/Operations：40 项测试通过。可选 PostgreSQL 测试也在独立空库中通过，覆盖竞争审批、回滚、进程排他、重启、精确重试，以及旧扩展字段和投递租约保留；临时测试库已删除。
+- 后端：八项单元/配置测试通过；原有可选 PostgreSQL 回归本次未重跑。全部十二组 HTTP 契约通过，包含网页 adapter、原生路径兼容和既有 fleet 接口。
+- 协议、Operations 和后端的格式及全部 target 严格 Clippy 通过。xtask 五项测试通过；开发监视已包含两个新 crate。
+- WASM 前端检查和生产打包通过。前端仍有 49 项既有 unused/dead-code 警告；macOS 后端链接器仍提示既有的大 `__eh_frame` 警告。
+- 本地开发进程已更新，`/healthz` 正常。现有 Pasion 管理员登录后可进入 Dashboard，Padmin 导航保留；`/hagency/inbox` 成功加载空列表。
+- 通知测试使用本机 Matrix stub，覆盖私有房间校验、丢失响应的 transaction 去重、仅元数据通知和 seen/snooze。开发配置未启用可选通知 worker，没有发送真实通知消息。
+
+本次未重建 Docker 镜像，也未运行真实 hagency-rs delegation、Agent 创建/聊天或 Codex/Claude 配额执行。
+Palpo 清理在独立分支提交为草稿 [PR #512](https://github.com/palpo-im/palpo/pull/512)，移除旧应用及其 CI，补充双语迁移说明。
+确认全部 Rust 源码、Cargo 清单/锁文件、Matrix 测试/部署均未修改，没有遗留的应用路径引用，空白检查通过；这种源码移除/文档变更未重跑 Palpo Rust 测试。
+替代版本发布及客户端/状态迁移验收前，该 PR 保持草稿。草稿中尚未完成的在线关联/delegation 不声明为已实现。

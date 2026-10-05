@@ -163,3 +163,13 @@ impl Upstream {
         }
     }
 }
+
+impl From<hagency_operations::Error> for ApiError {
+    fn from(e: hagency_operations::Error) -> Self {
+        Self {
+            status: e.status,
+            code: e.code,
+            message: e.message,
+        }
+    }
+}

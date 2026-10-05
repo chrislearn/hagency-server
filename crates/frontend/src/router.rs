@@ -26,6 +26,8 @@ pub enum Route {
         #[route("/")]
         Dashboard {},
 
+        #[route("/hagency/inbox")]
+        HagencyInbox {},
         #[route("/hagency/projects")]
         HagencyProjects {},
         #[route("/hagency/request-agent")]
@@ -212,7 +214,8 @@ fn AuthenticatedLayout() -> Element {
         (Some(false), _) => {
             let member_page = matches!(
                 route,
-                Route::HagencyProjects {}
+                Route::HagencyInbox {}
+                    | Route::HagencyProjects {}
                     | Route::HagencyRequestAgent {}
                     | Route::HagencyRequests {}
                     | Route::HagencyOwned {}
@@ -536,4 +539,9 @@ fn NotFound(route: Vec<String>) -> Element {
             }
         }
     }
+}
+
+#[component]
+fn HagencyInbox() -> Element {
+    rsx! { pages::hagency::inbox::Inbox {} }
 }

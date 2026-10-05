@@ -19,6 +19,9 @@ struct Args {
     config: PathBuf,
     #[arg(long)]
     check_config: bool,
+    /// Offline import of a reviewed engagement/delegation/resource projection.
+    #[arg(long, conflicts_with_all = ["bootstrap_admin", "check_config", "list_config_files"])]
+    import_authority: Option<PathBuf>,
     #[arg(long)]
     list_config_files: bool,
     #[arg(long, requires = "bootstrap_password_file")]
@@ -48,6 +51,29 @@ async fn run() -> anyhow::Result<()> {
     let mut conf = Config::load(&args.config)?;
     if args.check_config {
         println!("Configuration is valid.");
+        return Ok(());
+    }
+    if let Some(path) = &args.import_authority {
+        let authority = serde_json::from_slice::<hagency_operations::workflow::AuthoritySnapshot>(
+            &std::fs::read(path)?,
+        )?;
+        let server = conf.matrix.server_name.to_string().try_into()?;
+        let store = hagency_operations::store::Store::postgres(&conf.database_url).await?;
+        store
+            .bind(
+                conf.matrix.server_name.as_str(),
+                &conf.internal_origin().origin().ascii_serialization(),
+            )
+            .await?;
+        store.transaction(|state| {
+            let mut workflows = hagency_operations::workflow::Workflows::load(state)?;
+            workflows.import_authority(authority, &server)?;
+            workflows.save(state)?;
+            state["audit"].as_array_mut().ok_or_else(|| hagency_operations::fail(503,"workflow_state_invalid"))?
+                .push(serde_json::json!({"atMs":hagency_operations::now_ms(),"actor":"offline_operator","action":"operations.import_authority","result":"committed"}));
+            Ok(())
+        }).await?;
+        println!("Hagency authority imported. No server was started.");
         return Ok(());
     }
     let filter =
@@ -111,6 +137,7 @@ async fn run() -> anyhow::Result<()> {
     }
     let store = Arc::new(Store::postgres(&conf.database_url).await?);
     let admin = Admin::new(&conf, store).await?;
+    let notifications = admin.start_notifications(&conf)?;
     let worker = conf
         .account_config
         .as_ref()
@@ -153,6 +180,10 @@ async fn run() -> anyhow::Result<()> {
     });
     tracing::info!(listen=%conf.listen,public_origin=%conf.public_origin,"hagency-server started");
     server.serve(service).await;
+    if let Some(worker) = notifications {
+        worker.abort();
+        let _ = worker.await;
+    }
     if let Some(worker) = worker {
         worker.abort();
         let _ = worker.await;

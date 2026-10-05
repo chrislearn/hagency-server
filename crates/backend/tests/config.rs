@@ -153,3 +153,30 @@ fn component_paths_belong_to_each_file_and_are_listed_for_watchers() {
     assert!(Config::load(&path).is_err());
     assert!(!host_dir.join("data").exists());
 }
+
+#[test]
+fn notification_credentials_belong_to_hagency_config_and_require_a_local_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fixture(dir.path());
+    let token = path.parent().unwrap().join("notification-token");
+    std::fs::write(&token, "fixture-secret").unwrap();
+    let server = Config::load(&path).unwrap().matrix.server_name.to_string();
+    let enabled = format!(
+        "{HOST}\n[action_notifications]\nbot_mxid = \"@notifications:{server}\"\ntoken_file = \"notification-token\"\n"
+    );
+    std::fs::write(&path, &enabled).unwrap();
+    let conf = Config::load(&path).unwrap();
+    assert_eq!(
+        conf.action_notifications.as_ref().unwrap().token_file,
+        token.canonicalize().unwrap()
+    );
+    std::fs::write(
+        &path,
+        enabled.replace(
+            &format!("@notifications:{server}"),
+            "@notifications:other.invalid",
+        ),
+    )
+    .unwrap();
+    assert!(Config::load(&path).is_err());
+}
