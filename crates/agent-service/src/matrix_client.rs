@@ -127,6 +127,26 @@ impl MatrixClient {
         Ok(())
     }
     pub async fn provision(&self, agent: &Agent, room: &str, invite: bool) -> Result<()> {
+        self.provision_identity(agent).await?;
+        if invite {
+            self.call(
+                Method::POST,
+                &["_matrix", "client", "v3", "rooms", room, "invite"],
+                &self.service,
+                Some(json!({"user_id":agent.puppet_mxid})),
+            )
+            .await?;
+        }
+        self.call(
+            Method::POST,
+            &["_matrix", "client", "v3", "join", room],
+            &agent.puppet_mxid,
+            Some(json!({})),
+        )
+        .await?;
+        Ok(())
+    }
+    pub async fn provision_identity(&self, agent: &Agent) -> Result<()> {
         let who = self
             .call(
                 Method::GET,
@@ -150,22 +170,6 @@ impl MatrixClient {
             ],
             &agent.puppet_mxid,
             Some(json!({"displayname":agent.display_name})),
-        )
-        .await?;
-        if invite {
-            self.call(
-                Method::POST,
-                &["_matrix", "client", "v3", "rooms", room, "invite"],
-                &self.service,
-                Some(json!({"user_id":agent.puppet_mxid})),
-            )
-            .await?;
-        }
-        self.call(
-            Method::POST,
-            &["_matrix", "client", "v3", "join", room],
-            &agent.puppet_mxid,
-            Some(json!({})),
         )
         .await?;
         Ok(())

@@ -39,7 +39,19 @@ impl Error {
         }
     }
 }
-pub(crate) fn token() -> String {
+/// Public entity identity, ordered within this process even in the same millisecond.
+/// Lowercase Crockford Base32 also fits Matrix user localparts.
+pub(crate) fn entity_id() -> Result<String> {
+    static IDS: std::sync::Mutex<ulid::Generator> = std::sync::Mutex::new(ulid::Generator::new());
+    let mut ids = IDS
+        .lock()
+        .map_err(|_| Error::Unavailable("entity_id_unavailable"))?;
+    ids.generate()
+        .map(|id| id.to_string().to_ascii_lowercase())
+        .map_err(|_| Error::Unavailable("entity_id_unavailable"))
+}
+/// Bearer credentials and worker claims require independent full-entropy randomness.
+pub(crate) fn secret_token() -> String {
     hex::encode(rand::random::<[u8; 32]>())
 }
 pub(crate) fn hash(value: &str) -> String {
@@ -56,4 +68,44 @@ pub(crate) fn key(value: &str) -> Result<()> {
         return Err(Error::Invalid("invalid_identifier"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn assert_entity_id(value: &str, prefix: &str) {
+    let suffix = value.strip_prefix(prefix).expect("entity prefix");
+    assert_eq!(suffix.len(), 26);
+    assert!(
+        suffix
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b"abcdefghjkmnpqrstvwxyz".contains(&b))
+    );
+    ulid::Ulid::from_string(suffix).expect("valid ULID");
+    key(value).expect("valid API identifier");
+}
+
+#[cfg(test)]
+mod id_tests {
+    #[test]
+    fn entity_ids_are_lowercase_and_monotonic() {
+        let mut previous = String::new();
+        for _ in 0..256 {
+            let next = super::entity_id().unwrap();
+            super::assert_entity_id(&format!("agt_{next}"), "agt_");
+            assert!(next > previous);
+            let mxid = format!("@_hagency_agt_{next}:example.test");
+            assert!(mxid.len() < 255);
+            previous = next;
+        }
+    }
+
+    #[test]
+    fn credentials_remain_independent_256_bit_random_values() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..32 {
+            let secret = super::secret_token();
+            assert_eq!(secret.len(), 64);
+            assert_eq!(hex::decode(&secret).unwrap().len(), 32);
+            assert!(seen.insert(secret));
+        }
+    }
 }

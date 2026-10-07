@@ -18,6 +18,7 @@ reqwest = { workspace = true, features = ["form"] }
 url.workspace = true
 percent-encoding = "2"
 rand.workspace = true
+ulid = "3.0.0"
 sha2.workspace = true
 subtle.workspace = true
 hex.workspace = true

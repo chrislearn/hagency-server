@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    domain::{AdminFacts, CreateAgent, DomainStore, RoomFacts},
+    domain::{AdminFacts, CreateBoundAgent, DomainStore, RoomFacts},
     identity::Identity,
     store::{RegisterDevice, Store},
 };
@@ -27,7 +27,7 @@ async fn fixture() -> Fixture {
         .unwrap();
     let transport = TransportStore::open(&url, Limits::default()).await.unwrap();
     let now = crate::api::now_ms();
-    let suffix = token();
+    let suffix = secret_token();
     let grant = auth
         .sign_in(
             Identity {
@@ -66,11 +66,13 @@ async fn fixture() -> Fixture {
         .register_project(&user, &space, &sf, now)
         .await
         .unwrap();
+    crate::assert_entity_id(&project.id, "prj_");
     domain
         .register_room(&user, &project.id, &room, &sf, &rf, now)
         .await
         .unwrap();
     let mut facts = RoomFacts {
+        owner_direct_valid: false,
         owner_mxid: user.mxid.clone(),
         room_id: room.clone(),
         space_id: space.clone(),
@@ -84,9 +86,9 @@ async fn fixture() -> Fixture {
         encrypted: false,
     };
     let created = domain
-        .create_agent(
+        .create_bound_agent(
             &user,
-            CreateAgent {
+            CreateBoundAgent {
                 project_id: project.id,
                 room_id: room.clone(),
                 display_name: "Transport Codex".into(),
@@ -98,6 +100,8 @@ async fn fixture() -> Fixture {
         .await
         .unwrap();
     facts.puppet_mxid = Some(created.agent.puppet_mxid.clone());
+    crate::assert_entity_id(&created.agent.id, "agt_");
+    crate::assert_entity_id(&created.binding.id, "bnd_");
     facts.puppet_in_room = true;
     domain
         .activate_binding(
@@ -133,7 +137,21 @@ async fn fixture() -> Fixture {
         .unwrap();
     let p = auth.authenticate(&first.token, now, true).await.unwrap();
     let second = auth.authenticate(&second.token, now, true).await.unwrap();
+    domain
+        .set_execution_instance(
+            &user,
+            &created.agent.id,
+            crate::domain::SetExecutionInstance {
+                device_id: p.device_id.clone().unwrap(),
+                name: "First instance".into(),
+                expected_generation: 0,
+            },
+            now,
+        )
+        .await
+        .unwrap();
     let facts = DeliveryFacts {
+        owner_direct_valid: false,
         owner_mxid: user.mxid,
         requester_mxid: "@requester:example.test".into(),
         puppet_mxid: created.agent.puppet_mxid,
@@ -189,7 +207,10 @@ async fn enqueue(f: &Fixture, id: &str) -> String {
         .await
         .unwrap()
     {
-        RouteResult::Queued { dispatch_id } => dispatch_id,
+        RouteResult::Queued { dispatch_id } => {
+            crate::assert_entity_id(&dispatch_id, "evt_");
+            dispatch_id
+        },
         _ => panic!("expected queue insertion"),
     }
 }
@@ -452,6 +473,25 @@ async fn postgres_takeover_and_device_revocation_fence_old_execution() {
         .unwrap();
     f.transport
         .acknowledge(&f.p, &reference, &ack, now)
+        .await
+        .unwrap();
+    let instance = f
+        .domain
+        .execution_instance(&f.p, &f.agent, now)
+        .await
+        .unwrap()
+        .unwrap();
+    f.domain
+        .set_execution_instance(
+            &f.p,
+            &f.agent,
+            crate::domain::SetExecutionInstance {
+                device_id: f.second.device_id.clone().unwrap(),
+                name: "Replacement execution instance".into(),
+                expected_generation: instance.generation,
+            },
+            now,
+        )
         .await
         .unwrap();
     let second = f
@@ -872,6 +912,25 @@ async fn postgres_known_reply_recovers_under_new_epoch_without_reexecuting_unkno
     };
     let id = enqueue(&f, "known-after-takeover").await;
     running(&f, &old, &id, "known-execution").await;
+    let instance = f
+        .domain
+        .execution_instance(&f.p, &f.agent, now)
+        .await
+        .unwrap()
+        .unwrap();
+    f.domain
+        .set_execution_instance(
+            &f.p,
+            &f.agent,
+            crate::domain::SetExecutionInstance {
+                device_id: f.second.device_id.clone().unwrap(),
+                name: "Replacement execution instance".into(),
+                expected_generation: instance.generation,
+            },
+            now,
+        )
+        .await
+        .unwrap();
     let current = f
         .transport
         .acquire_for_test(&f.second, &f.agent, 60_000, true, now)
@@ -918,6 +977,7 @@ async fn postgres_known_reply_recovers_under_new_epoch_without_reexecuting_unkno
         .await
         .unwrap();
     assert_eq!(intent.dispatch_epoch, old.epoch);
+    crate::assert_entity_id(&intent.id, "rep_");
     assert_eq!(intent.delivery_epoch, new.epoch);
     assert_eq!(intent.matrix_txn_id, format!("hagency_{}", hash(&id)));
     let replay = f
@@ -1043,6 +1103,25 @@ async fn postgres_known_reply_reauthorizes_only_unsent_cancel_and_preserves_ambi
         .await
         .unwrap();
     f.transport.release_lease(&f.p, &old, now).await.unwrap();
+    let instance = f
+        .domain
+        .execution_instance(&f.p, &f.agent, now)
+        .await
+        .unwrap()
+        .unwrap();
+    f.domain
+        .set_execution_instance(
+            &f.p,
+            &f.agent,
+            crate::domain::SetExecutionInstance {
+                device_id: f.second.device_id.clone().unwrap(),
+                name: "Replacement execution instance".into(),
+                expected_generation: instance.generation,
+            },
+            now,
+        )
+        .await
+        .unwrap();
     let current = f
         .transport
         .acquire_for_test(&f.second, &f.agent, 60_000, false, now)
@@ -1407,7 +1486,7 @@ async fn postgres_selected_binding_is_filtered_before_limit_and_cannot_cross_own
         .await
         .unwrap();
     let binding = f.domain.binding(&user, &f.binding, now).await.unwrap();
-    let room = format!("!other_{}:example.test", token());
+    let room = format!("!other_{}:example.test", secret_token());
     let space_admin = AdminFacts {
         actor_mxid: user.mxid.clone(),
         room_id: f.facts.space_id.clone(),
@@ -1426,7 +1505,7 @@ async fn postgres_selected_binding_is_filtered_before_limit_and_cannot_cross_own
     f.domain
         .register_room(
             &user,
-            &binding.project_id,
+            binding.project_id.as_deref().unwrap(),
             &room,
             &space_admin,
             &room_admin,
@@ -1435,6 +1514,7 @@ async fn postgres_selected_binding_is_filtered_before_limit_and_cannot_cross_own
         .await
         .unwrap();
     let facts = RoomFacts {
+        owner_direct_valid: false,
         owner_mxid: user.mxid.clone(),
         room_id: room.clone(),
         space_id: f.facts.space_id.clone(),
@@ -1453,7 +1533,7 @@ async fn postgres_selected_binding_is_filtered_before_limit_and_cannot_cross_own
             &user,
             &f.agent,
             crate::domain::BindRoom {
-                project_id: binding.project_id,
+                project_id: binding.project_id.unwrap(),
                 room_id: room.clone(),
                 idempotency_key: "bind-second".into(),
             },
@@ -1476,6 +1556,7 @@ async fn postgres_selected_binding_is_filtered_before_limit_and_cannot_cross_own
         enqueue(&f, &format!("older-other-{i}")).await;
     }
     let second_facts = DeliveryFacts {
+        owner_direct_valid: false,
         room_id: room.clone(),
         ..f.facts.clone()
     };
@@ -1550,6 +1631,7 @@ async fn postgres_failed_tool_authorization_still_commits_owner_membership_gener
     };
     assert!(binding.generation > old.binding_generation);
     let restored = RoomFacts {
+        owner_direct_valid: false,
         owner_mxid: f.facts.owner_mxid.clone(),
         room_id: f.facts.room_id.clone(),
         space_id: f.facts.space_id.clone(),
@@ -1657,3 +1739,9 @@ async fn postgres_matrix_403_after_fresh_check_is_a_permanent_hold_not_an_unknow
 
 #[path = "transport_history_tests.rs"]
 mod history_tests;
+
+#[path = "execution_instance_tests.rs"]
+mod execution_instance_tests;
+
+#[path = "owner_direct_tests.rs"]
+mod owner_direct_tests;

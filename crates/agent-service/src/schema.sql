@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS hagency_agent_v1.devices (
  installation_id text NOT NULL, name text NOT NULL,
  session_id text NOT NULL REFERENCES hagency_agent_v1.sessions(id),
  token_hash text NOT NULL UNIQUE, generation bigint NOT NULL CHECK(generation>0),
- revoked boolean NOT NULL DEFAULT false, UNIQUE(user_id,installation_id),
+ revoked boolean NOT NULL DEFAULT false, UNIQUE(user_id,installation_id), UNIQUE(id,user_id),
  FOREIGN KEY(session_id,user_id) REFERENCES hagency_agent_v1.sessions(id,user_id)
 );
 CREATE OR REPLACE FUNCTION hagency_agent_v1.retain_device_scope() RETURNS trigger LANGUAGE plpgsql AS $$

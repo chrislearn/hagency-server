@@ -50,3 +50,9 @@ Appservice 的 **hs_token** 与 owner/device token 是不同凭据。推荐 Auth
 动态 path 使用源码条件锚点和已审核的 operation inventory；这是轻量静态契约检查，不是完整 Rust AST/OpenAPI/JSON Schema 实现，也不替代真实 HTTP/PG 集成测试。路由源码修改会使 hash 检查失败：应重新审核变化、更新文档和 hash，不能仅忽略漂移。两个版本化 JSON 是交付物；无需运行生成器或安装新的生产依赖。
 
 `POST execution/history` 分页返回永久 owner/device 范围的已开始执行元数据（每页 128），包含原作用域与本地 inbox 的 immutableDigest，不返回消息原文或费用。Acquire 必须提交 historySnapshot，并与 start 共用事务锁原子检查；过期快照返回 409 且不改变旧租约。客户端仍须核对本地费用/保守预留证据，前后检查与同 owner 完整恢复；仅 tuple 覆盖不代表费用已结算。退休、暂停或 TTL 不删除已开始历史。当前服务端 owner_events 原文不可变；未来正文压缩必须先持久化原 immutableDigest。分页每页重算全历史摘要为 O(N)，当前同授权事务锁串行化，后续可在保持永久证据语义下优化。
+
+## 实体 ID
+
+新分配的 Hagency 实体 ID 为类型前缀加26字符小写 ULID：`usr_`、`ses_`、`dev_`、`prj_`、`agt_`、`bnd_`、`ins_`、`evt_`、`rep_`。生成器在同一服务器进程内单调递增；跨进程/重启不承诺全局严格生成顺序。Agent 傀儡账号使用 `@_hagency_agt_<ulid>:<server>`（配置 namespace 可带额外后缀）。客户端仍将 ID 作为不透明字符串，不能解析时间戳来推断权限、租约、业务时间或完成状态。
+
+`entity_id()` 与 `secret_token()` 分开：会话/设备 bearer 和 reply worker claim 保留独立32字节随机值，不用 ULID。数据库字段和 API DTO 不变；已持久化身份及幂等请求仍引用原 ID，Matrix Room/Event ID、消息事务 ID、摘要、客户端安装标识与已开始的 execution ID 保留原生成规则。

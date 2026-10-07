@@ -39,14 +39,17 @@ pub fn Agents() -> Element {
             }
         }
         form{class:"hg-card hg-stack",onsubmit:move|e|{
-            e.prevent_default();if busy(){return;}let id=selected();let body=if id.is_empty(){json!({"projectId":project().trim(),"roomId":room().trim(),"displayName":name().trim(),"idempotencyKey":command()})}else{json!({"projectId":project().trim(),"roomId":room().trim(),"idempotencyKey":command()})};
+            e.prevent_default();if busy(){return;}let id=selected();let body=command_body(&id,&name(),&project(),&room(),&command());
             let path=if id.is_empty(){"/agents".into()}else{format!("/agents/{id}/bindings")};busy.set(true);
             spawn(async move{match mutate(&path,"POST",body).await{
                 Ok(result)=>{message.set(result);command.set(browser_auth::operation_id());agents.restart();bindings.restart();},Err(e)=>message.set(e)}busy.set(false);});
         },h2{if selected().is_empty(){"Create an agent"}else{"Add a Room binding"}}
-            p{"Join the Space and Room first. Register the Room in the Project and invite the Hagency service account so it can invite the puppet. Encrypted Rooms wait for client crypto support."}
-            label{"Project ID" input{class:"hg-input",required:true,value:project(),oninput:move|e|{project.set(e.value());command.set(browser_auth::operation_id());}}}
-            label{"Room ID" input{class:"hg-input",required:true,value:room(),oninput:move|e|{room.set(e.value());command.set(browser_auth::operation_id());}}}
+            if selected().is_empty(){p{"Create a global agent identity first. It has no Project or Room until you choose a separate binding. Your local hagency-client selects its execution device and controls the runtime."}}
+            else {
+                p{"Join the Space and Room first. Register the Room in the Project and invite the Hagency service account so it can invite the puppet. Encrypted Rooms wait for client crypto support."}
+                label{"Project ID" input{class:"hg-input",required:true,value:project(),oninput:move|e|{project.set(e.value());command.set(browser_auth::operation_id());}}}
+                label{"Room ID" input{class:"hg-input",required:true,value:room(),oninput:move|e|{room.set(e.value());command.set(browser_auth::operation_id());}}}
+            }
             if selected().is_empty(){label{"Agent name" input{class:"hg-input",required:true,value:name(),oninput:move|e|{name.set(e.value());command.set(browser_auth::operation_id());}}}}
             button{class:"hg-button",disabled:busy(),r#type:"submit",if selected().is_empty(){"Create agent"}else{"Bind Room"}}
             if !selected().is_empty(){button{class:"hg-link",r#type:"button",onclick:move|_|{selected.set(String::new());command.set(browser_auth::operation_id());},"Create a different agent"}}
@@ -55,7 +58,7 @@ pub fn Agents() -> Element {
             for action in ["pause","resume"]{button{class:"hg-button",disabled:busy(),onclick:move|_|{let id=selected();busy.set(true);spawn(async move{match mutate(&format!("/agents/{id}/{action}"),"POST",json!({})).await{Ok(_)=>{message.set(format!("Agent {action} accepted."));agents.restart();},Err(e)=>message.set(e)}busy.set(false);});},"{action}"}}
             if let Some(Err(error))=bindings(){p{role:"alert","{error}"}}
             for binding in rows(&bindings().and_then(Result::ok).unwrap_or(Value::Null),"bindings"){
-                div{class:"hg-card",code{{text(&binding,"roomId")}}p{{format!("Project {}; state {}",binding["projectId"],binding["state"])}}
+                div{class:"hg-card",code{{text(&binding,"roomId")}}p{{if binding["scopeKind"]=="owner_direct"{format!("Owner direct; state {}",binding["state"])}else{format!("Project {}; state {}",binding["projectId"],binding["state"])}}}
                     for action in ["pause","resume","leave"]{
                         {let binding_id={text(&binding,"id")};rsx!{button{class:"hg-button",disabled:busy(),onclick:move|_|{
                             let id=binding_id.clone();busy.set(true);spawn(async move{let (path,method)=if action=="leave"{(format!("/bindings/{id}"),"DELETE")}else{(format!("/bindings/{id}/{action}"),"POST")};
@@ -66,4 +69,39 @@ pub fn Agents() -> Element {
             }
         }}
     }}
+}
+
+fn command_body(selected: &str, name: &str, project: &str, room: &str, key: &str) -> Value {
+    if selected.is_empty() {
+        json!({"displayName":name.trim(),"idempotencyKey":key})
+    } else {
+        json!({"projectId":project.trim(),"roomId":room.trim(),"idempotencyKey":key})
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn browser_global_agent_creation_does_not_depend_on_stale_room_fields() {
+        assert_eq!(
+            command_body(
+                "",
+                " New agent ",
+                "stale project",
+                "stale room",
+                "create-key"
+            ),
+            json!({"displayName":"New agent","idempotencyKey":"create-key"})
+        );
+        assert_eq!(
+            command_body(
+                "agt_existing",
+                "ignored old name",
+                " prj_owned ",
+                " !discussion:server ",
+                "bind-key"
+            ),
+            json!({"projectId":"prj_owned","roomId":"!discussion:server","idempotencyKey":"bind-key"})
+        );
+    }
 }

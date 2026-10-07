@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS hagency_agent_v1.domain_deployment (
  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
- version integer NOT NULL CHECK(version=1),
+ version integer NOT NULL CHECK(version=2),
  namespace text NOT NULL
 );
 CREATE TABLE IF NOT EXISTS hagency_agent_v1.projects (
@@ -17,11 +17,14 @@ CREATE TABLE IF NOT EXISTS hagency_agent_v1.agents (
  id text PRIMARY KEY, owner_user_id text NOT NULL REFERENCES hagency_agent_v1.users(id),
  puppet_mxid text NOT NULL UNIQUE, display_name text NOT NULL,
  state text NOT NULL CHECK(state IN ('creating','active','suspended','retiring','retired')),
- generation bigint NOT NULL DEFAULT 1 CHECK(generation>0)
+ generation bigint NOT NULL DEFAULT 1 CHECK(generation>0),
+ owner_direct_room_id text UNIQUE, UNIQUE(id,owner_user_id)
 );
 CREATE TABLE IF NOT EXISTS hagency_agent_v1.bindings (
  id text PRIMARY KEY, agent_id text NOT NULL REFERENCES hagency_agent_v1.agents(id),
- project_id text NOT NULL REFERENCES hagency_agent_v1.projects(id), room_id text NOT NULL,
+ project_id text REFERENCES hagency_agent_v1.projects(id), room_id text NOT NULL,
+ scope_kind text NOT NULL DEFAULT 'project' CHECK(scope_kind IN ('project','owner_direct')),
+ CHECK((scope_kind='project' AND project_id IS NOT NULL) OR (scope_kind='owner_direct' AND project_id IS NULL)),
  state text NOT NULL CHECK(state IN ('joining','active','suspended','leaving','left','revoked')),
  generation bigint NOT NULL DEFAULT 1 CHECK(generation>0),
  admin_project_paused boolean NOT NULL DEFAULT false,

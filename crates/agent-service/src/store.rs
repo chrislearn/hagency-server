@@ -1,4 +1,4 @@
-use crate::{Error, Result, hash, identity::Identity, key, token};
+use crate::{Error, Result, entity_id, hash, identity::Identity, key, secret_token};
 use diesel::{
     sql_query,
     sql_types::{BigInt, Bool, Nullable, Text},
@@ -111,7 +111,7 @@ impl Store {
                 .bind::<Text,_>(&identity.issuer).bind::<Text,_>(&identity.subject).bind::<Text,_>(&identity.mxid).load::<User>(db).await?;
             let user_id=match users.as_slice() {
                 []=> {
-                    let id=format!("usr_{}",token());
+                    let id=format!("usr_{}",entity_id()?);
                     sql_query("INSERT INTO hagency_agent_v1.users(id,issuer,subject,mxid) VALUES($1,$2,$3,$4)")
                         .bind::<Text,_>(&id).bind::<Text,_>(&identity.issuer).bind::<Text,_>(&identity.subject).bind::<Text,_>(&identity.mxid).execute(db).await?;
                     id
@@ -121,9 +121,9 @@ impl Store {
                 },
                 _=>return Err(Error::Conflict("identity_mapping_mismatch")),
             };
-            let session_token=token();
+            let session_token=secret_token();
             sql_query("INSERT INTO hagency_agent_v1.sessions(id,user_id,token_hash,client_id,valid_until_ms) VALUES($1,$2,$3,$4,$5)")
-                .bind::<Text,_>(format!("ses_{}",token())).bind::<Text,_>(&user_id).bind::<Text,_>(hash(&session_token)).bind::<Text,_>(&identity.client_id).bind::<BigInt,_>(identity.valid_until_ms).execute(db).await?;
+                .bind::<Text,_>(format!("ses_{}",entity_id()?)).bind::<Text,_>(&user_id).bind::<Text,_>(hash(&session_token)).bind::<Text,_>(&identity.client_id).bind::<BigInt,_>(identity.valid_until_ms).execute(db).await?;
             Ok(SessionGrant {token:session_token,user_id,mxid:identity.mxid,valid_until_ms:identity.valid_until_ms})
         }).await
     }
@@ -219,10 +219,10 @@ impl Store {
         let mut db = self.db.lock().await;
         (*db).transaction::<_,Error,_>(async move |db: &mut AsyncPgConnection| {
             let p=Self::principal(db,credential,now,false).await?;
-            let device_token=token();
+            let device_token=secret_token();
             // Same owner/install keeps stable id, rotates credential and fences prior generations.
             let device=sql_query("INSERT INTO hagency_agent_v1.devices(id,user_id,installation_id,name,session_id,token_hash,generation) VALUES($1,$2,$3,$4,$5,$6,1) ON CONFLICT(user_id,installation_id) DO UPDATE SET name=EXCLUDED.name,session_id=EXCLUDED.session_id,token_hash=EXCLUDED.token_hash,generation=hagency_agent_v1.devices.generation+1,revoked=false RETURNING id,generation")
-                .bind::<Text,_>(format!("dev_{}",token())).bind::<Text,_>(&p.user_id).bind::<Text,_>(&request.installation_id).bind::<Text,_>(request.name.trim()).bind::<Text,_>(&p.session_id).bind::<Text,_>(hash(&device_token)).get_result::<Device>(db).await?;
+                .bind::<Text,_>(format!("dev_{}",entity_id()?)).bind::<Text,_>(&p.user_id).bind::<Text,_>(&request.installation_id).bind::<Text,_>(request.name.trim()).bind::<Text,_>(&p.session_id).bind::<Text,_>(hash(&device_token)).get_result::<Device>(db).await?;
             Ok(DeviceGrant {device_id:device.id,token:device_token,generation:device.generation,valid_until_ms:p.valid_until_ms})
         }).await
     }
@@ -267,7 +267,7 @@ mod tests {
             .await
             .unwrap();
         let base = crate::api::now_ms();
-        let suffix = token();
+        let suffix = secret_token();
         let subject = format!("subject-{suffix}");
         let mxid = format!("@alice_{suffix}:example.test");
         let s = store
@@ -285,6 +285,12 @@ mod tests {
             )
             .await
             .unwrap();
+        crate::assert_entity_id(&s.user_id, "usr_");
+        crate::assert_entity_id(&device.device_id, "dev_");
+        let principal = store.authenticate(&s.token, base + 10_000, false).await.unwrap();
+        crate::assert_entity_id(&principal.session_id, "ses_");
+        assert_eq!(s.token.len(), 64);
+        assert_eq!(device.token.len(), 64);
         assert_eq!(
             store
                 .authenticate(&device.token, base + 39_999, true)

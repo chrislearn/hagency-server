@@ -41,6 +41,9 @@ FIXTURE_FOLDERS = []
 BACKUP_RESTORE = os.environ.get("HAGENCY_TEST_BACKUP_RESTORE") == "1"
 NATIVE_PKCE = BACKUP_RESTORE or os.environ.get("HAGENCY_TEST_NATIVE_PKCE") == "1"
 
+def entity_id(value, prefix):
+    assert re.fullmatch(re.escape(prefix) + r"[0-7][0-9abcdefghjkmnpqrstvwxyz]{25}", value), "invalid lowercase ULID entity ID"
+
 def sql(database, statement, capture=False):
     result = subprocess.run(["docker", "exec", CONTAINER, "psql", "-U", USER,
         "-d", database, "-v", "ON_ERROR_STOP=1", "-At", "-c", statement],
@@ -153,7 +156,7 @@ try:
                     raise RuntimeError("isolated embedded server failed to start; logs were kept private")
                 try:
                     discovery = request(origin, "GET", "/api/hagency/v1/discovery")
-                    assert discovery["protocolVersion"] == 1
+                    assert discovery["protocolVersion"] == 2
                     assert discovery["serverName"] == server_name
                     break
                 except (URLError, TimeoutError):
@@ -253,18 +256,33 @@ try:
             request(origin, "PUT", "/_matrix/client/v3/rooms/" + quote(space, safe="") + "/state/m.space.child/" + quote(discussion, safe=""), {"via": [server_name]}, matrix_token)
             project = request(origin, "POST", "/api/hagency/v1/projects/adopt", {"spaceId": space}, user_token)["project"]
             request(origin, "POST", "/api/hagency/v1/projects/" + project["id"] + "/rooms/adopt", {"roomId": discussion}, user_token)
-            create_body = {"projectId": project["id"], "roomId": discussion, "displayName": "Smoke Agent", "idempotencyKey": "smoke_create"}
+            create_body = {"displayName": "Smoke Agent", "idempotencyKey": "smoke_create"}
+            assert request(origin,"GET","/api/hagency/v1/commands/agent.create/smoke_create",token=user_token,expected_status=404)["code"]=="command_not_found"
+            creation = request(origin, "POST", "/api/hagency/v1/agents", create_body, user_token)
+            for _ in range(60):
+                if creation["commandState"] == "active": break
+                time.sleep(0.5)
+                creation = request(origin, "POST", "/api/hagency/v1/agents", create_body, user_token)
+            assert creation["commandState"] == "active", "global puppet identity provisioning stayed pending"
+            agent = creation["creation"]["agent"]
+            entity_id(agent["id"], "agt_")
+            entity_id(project["id"], "prj_")
+            entity_id(session["userId"], "usr_")
+            assert agent["puppetMxid"] == "@_hagency_" + agent["id"] + ":" + human["user_id"].split(":", 1)[1]
+            assert "binding" not in creation["creation"] and agent["ownerUserId"] == session["userId"]
+            bind_path = "/api/hagency/v1/agents/"+agent["id"]+"/bindings"
+            bind_body = {"projectId": project["id"], "roomId": discussion, "idempotencyKey": "smoke_bind"}
             project_path = "/api/hagency/v1/projects/" + project["id"]
             room_path = project_path + "/rooms/" + quote(discussion, safe="")
             assert not request(origin,"GET",project_path+"/service-state",token=user_token)["servicePaused"]
             room_state=request(origin,"GET",room_path+"/service-state",token=user_token)
             assert room_state["roomId"]==discussion and not room_state["servicePaused"]
             def denied_creation(key, code):
-                body=dict(create_body,idempotencyKey=key)
-                rejection=request(origin,"POST","/api/hagency/v1/agents",body,user_token,expected_status=401)
+                body=dict(bind_body,idempotencyKey=key)
+                rejection=request(origin,"POST",bind_path,body,user_token,expected_status=401)
                 assert rejection["code"]==code, "unexpected authorization rejection"
-                assert request(origin,"GET","/api/hagency/v1/agents",token=user_token)["agents"]==[], "denied creation allocated an Agent"
-                assert request(origin,"GET","/api/hagency/v1/commands/agent.create/"+key,token=user_token,expected_status=401)["code"]=="domain_object_not_authorized"
+                assert request(origin,"GET",bind_path,token=user_token)["bindings"]==[], "denied binding allocated a scope"
+                assert request(origin,"GET","/api/hagency/v1/commands/agent.bind/"+key,token=user_token,expected_status=404)["code"]=="command_not_found"
             # Persisted scope pauses must block creation even with zero bindings.
             paused=request(origin,"POST",project_path+"/pause-service",token=user_token)
             assert paused["affectedBindings"]==0
@@ -285,21 +303,19 @@ try:
             denied_creation("blocked_remaining_project_pause","administrator_pause_active")
             request(origin,"POST",project_path+"/clear-service-pause",token=user_token)
             assert not request(origin,"GET",room_path+"/service-state",token=user_token)["servicePaused"]
-            print("PASS: zero-binding Project/Room pauses and Room disabled creation reject new Agents without allocating commands; encoded Room policy and merged pause state verified")
-            creation = request(origin, "POST", "/api/hagency/v1/agents", create_body, user_token)
+            print("PASS: zero-binding Project/Room pauses and Room disabled policy reject bindings without allocating commands; global Agent identity remains independent; encoded Room policy and merged pause state verified")
+            bound_first = request(origin, "POST", bind_path, bind_body, user_token)
             for _ in range(60):
-                if creation["commandState"] == "active":
-                    break
+                if bound_first["commandState"] == "active": break
                 time.sleep(0.5)
-                creation = request(origin, "POST", "/api/hagency/v1/agents", create_body, user_token)
-            assert creation["commandState"] == "active", "durable puppet provisioning stayed pending"
-            agent = creation["creation"]["agent"]
-            binding = creation["creation"]["binding"]
-            assert agent["ownerUserId"] == session["userId"]
+                bound_first = request(origin, "POST", bind_path, bind_body, user_token)
+            assert bound_first["commandState"] == "active", "independent Room binding stayed pending"
+            binding = bound_first["creation"]["binding"]
+            assert binding["scopeKind"] == "project" and binding["projectId"] == project["id"]
             repeat = request(origin, "POST", "/api/hagency/v1/agents", create_body, user_token)
             assert repeat["creation"]["agent"]["id"] == agent["id"]
             status=request(origin,"GET","/api/hagency/v1/commands/agent.create/smoke_create",token=user_token)
-            assert status["commandState"]=="active" and status["creation"]["agent"]["id"]==agent["id"] and status["creation"]["binding"]["id"]==binding["id"]
+            assert status["commandState"]=="active" and status["creation"]["agent"]["id"]==agent["id"] and "binding" not in status["creation"]
             changed=dict(create_body,displayName="Changed replay must fail")
             request(origin,"POST","/api/hagency/v1/agents",changed,user_token,expected_status=409)
             # No bearerless command discovery.
@@ -332,6 +348,13 @@ try:
             device = request(origin, "POST", "/api/hagency/v1/devices", {"installationId": "smoke_device", "name": "disposable integration device"}, user_token)
             request(origin, "POST", "/api/hagency/v1/sessions/current/renew", {"accessToken": matrix_token}, user_token)
             device_token = device["token"]
+            entity_id(device["deviceId"], "dev_")
+            assert len(device_token) == 64 and len(user_token) == 64
+            instance_path="/api/hagency/v1/agents/"+agent["id"]+"/execution-instance"
+            instance=request(origin,"PUT",instance_path,{"deviceId":device["deviceId"],"name":"smoke designated execution","expectedGeneration":0},user_token)["executionInstance"]
+            entity_id(instance["id"], "ins_")
+            assert request(origin,"GET",instance_path,token=user_token)["executionInstance"]==instance
+            assert any(d["id"]==device["deviceId"] for d in request(origin,"GET","/api/hagency/v1/devices",token=user_token)["devices"])
             history = request(origin, "POST", "/api/hagency/v1/execution/history", {"agentId": agent["id"], "cursor": None, "snapshot": None}, device_token)["history"]
             assert history["snapshot"]["count"] == 0 and history["executions"] == []
             lease = request(origin, "POST", "/api/hagency/v1/execution/leases/acquire", {"agentId": agent["id"], "ttlMs": 20000, "takeover": False, "historySnapshot": history["snapshot"]}, device_token)["lease"]
@@ -361,6 +384,9 @@ try:
             # Fixture completion checks transport; no AI model is called.
             reply_body = {"lease": reference, "reply": {"dispatchId": dispatch["id"], "executionId": "smoke_execution", "body": "fixture reply, no model invocation"}}
             reply = request(origin, "POST", "/api/hagency/v1/execution/replies", reply_body, device_token)["reply"]
+            entity_id(dispatch["id"], "evt_")
+            entity_id(binding["id"], "bnd_")
+            entity_id(reply["id"], "rep_")
             assert "workerToken" not in reply
             assert request(origin, "POST", "/api/hagency/v1/execution/replies", reply_body, device_token)["reply"]["id"] == reply["id"]
             for _ in range(20):
@@ -371,6 +397,35 @@ try:
             else:
                 raise RuntimeError("durable reply was not sent by the exact puppet")
             print("PASS: real delegated user identity, Space/Room authorization, permanent owner puppet, device lease, mention delivery, distinct ACK/start and idempotent reply outbox")
+            request(origin,"POST","/api/hagency/v1/execution/leases/renew",{"lease":reference,"ttlMs":60000},device_token)
+            direct_room=request(origin,"POST","/_matrix/client/v3/createRoom",{"preset":"private_chat","is_direct":True,"name":"Owner Agent DM","invite":[agent["puppetMxid"]],"initial_state":[{"type":"m.room.guest_access","state_key":"","content":{"guest_access":"forbidden"}},{"type":"m.room.history_visibility","state_key":"","content":{"history_visibility":"joined"}}]},matrix_token)["room_id"]
+            direct_path="/api/hagency/v1/agents/"+agent["id"]+"/owner-direct"
+            direct=request(origin,"POST",direct_path,{"roomId":direct_room},user_token)
+            for _ in range(30):
+                if direct["commandState"]=="active":break
+                time.sleep(0.5)
+                direct=request(origin,"POST",direct_path,{"roomId":direct_room},user_token)
+            assert direct["commandState"]=="active", "independent owner DM provisioning did not converge"
+            direct_binding=direct["creation"]["binding"]
+            assert direct_binding["projectId"] is None and direct_binding["scopeKind"]=="owner_direct"
+            assert request(origin,"GET",direct_path,token=user_token)["ownerDirectRoomId"]==direct_room
+            direct_message=request(origin,"PUT","/_matrix/client/v3/rooms/"+quote(direct_room,safe="")+"/send/m.room.message/owner_direct_probe",{"msgtype":"m.text","body":"direct owner request without mentions"},matrix_token)["event_id"]
+            direct_dispatch=None
+            for _ in range(30):
+                direct_events=request(origin,"POST","/api/hagency/v1/execution/events/poll",{"lease":reference,"bindingId":direct_binding["id"],"limit":10},device_token)["events"]
+                direct_dispatch=next((e for e in direct_events if e["eventId"]==direct_message),None)
+                if direct_dispatch:break
+                time.sleep(0.5)
+            assert direct_dispatch is not None,"owner DM request did not route without mentions"
+            request(origin,"POST","/api/hagency/v1/execution/events/ack",{"lease":reference,"dispatchId":direct_dispatch["id"]},device_token)
+            direct_start={"lease":reference,"dispatchId":direct_dispatch["id"],"executionId":"owner_direct_fixture_execution"}
+            request(origin,"POST","/api/hagency/v1/execution/events/start",direct_start,device_token)
+            direct_reply=request(origin,"POST","/api/hagency/v1/execution/replies",{"lease":reference,"reply":{"dispatchId":direct_dispatch["id"],"executionId":direct_start["executionId"],"body":"owner DM fixture reply; no model"}},device_token)["reply"]
+            for _ in range(30):
+                if sql(DBS[0],"SELECT state FROM hagency_agent_v1.reply_outbox WHERE id='"+direct_reply["id"]+"'",True)=="sent":break
+                time.sleep(0.5)
+            else:raise RuntimeError("owner DM puppet reply did not send")
+            print("PASS: private owner DM independent of Project, AS puppet join, unmentioned owner request, assigned-device execution and exact puppet reply")
             if BACKUP_RESTORE:
                 # Include actual persisted Matrix media and a configured Pasion
                 # password pepper; successful re-login will exercise that pepper.
@@ -500,6 +555,8 @@ try:
                 request(origin,"POST","/api/hagency/v1/execution/events/poll",{"lease":reference,"bindingId":binding["id"],"limit":10},old_device_token,expected_status=401)
                 device=request(origin,"POST","/api/hagency/v1/devices",{"installationId":"restored_smoke_device","name":"fresh recovery authority"},user_token)
                 device_token=device["token"]
+                request(origin,"POST","/api/hagency/v1/execution/leases/acquire",{"agentId":agent["id"],"ttlMs":60000,"takeover":True,"historySnapshot":history["snapshot"]},device_token,expected_status=401)
+                instance=request(origin,"PUT",instance_path,{"deviceId":device["deviceId"],"name":"restored designated execution","expectedGeneration":instance["generation"]},user_token)["executionInstance"]
                 restored_history=request(origin,"POST","/api/hagency/v1/execution/history",{"agentId":agent["id"],"cursor":None,"snapshot":None},device_token)["history"]
                 assert restored_history["snapshot"]["count"] >= 2 and restored_history["nextCursor"] is None
                 assert all("body" not in entry for entry in restored_history["executions"])

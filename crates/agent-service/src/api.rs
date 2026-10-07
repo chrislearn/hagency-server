@@ -98,7 +98,7 @@ impl App {
         let matrix = self.matrix_client.clone()?;
         let ready = self.startup_ready.clone();
         Some(tokio::spawn(async move {
-            let transaction = format!("readiness_{}", crate::token());
+            let transaction = format!("readiness_{}", crate::secret_token());
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 let result = async {
@@ -177,8 +177,8 @@ impl App {
         if path == "/api/hagency/v1/discovery" && method == salvo::http::Method::GET {
             return Ok(
                 json!({"product":"hagency-server","version":env!("CARGO_PKG_VERSION"),
-                "capabilities":["pasion-oauth","owner-agent-appservice-v1","projects-matrix-spaces-v1","device-execution-v1","execution-history-v1"],
-                "protocolVersion":1,"serverName":self.server_name,"homeserver":self.public,
+                "capabilities":["pasion-oauth","owner-agent-appservice-v1","projects-matrix-spaces-v1","device-execution-v1","execution-history-v1","global-agent-identity-v2","execution-instance-v1","owner-direct-v1"],
+                "protocolVersion":2,"serverName":self.server_name,"homeserver":self.public,
                 "serviceMxid":format!("@_hagency_service:{}",self.server_name),"issuer":self.issuer,"authorizationEndpoint":self.issuer.join("authorize").unwrap(),
                 "tokenEndpoint":self.issuer.join("oauth2/token").unwrap(),
                 "registrationEndpoint":self.issuer.join("oauth2/registration").unwrap(),"authorizationWindowMs":30000}),
@@ -294,6 +294,9 @@ impl App {
                     json!({"project":domain.register_project(&principal,&body.space_id,&facts,now_ms()).await?}),
                 );
             }
+            if path == "/api/hagency/v1/devices" && method == salvo::http::Method::GET {
+                return Ok(json!({"devices":domain.owner_devices(&principal,now_ms()).await?}));
+            }
             if path == "/api/hagency/v1/agents" && method == salvo::http::Method::POST {
                 if !self.startup_ready() {
                     return Err(Error::Unavailable("appservice_startup_not_ready"));
@@ -302,20 +305,72 @@ impl App {
                     .parse_json()
                     .await
                     .map_err(|_| Error::Invalid("invalid_arguments"))?;
-                let project = domain.project(&principal, &body.project_id, now).await?;
-                self.accept_service_invitation(gateway, &body.room_id)
-                    .await?;
-                let facts = gateway
-                    .room(&body.room_id, &project.space_id, &principal.mxid, None)
-                    .await?;
-                let created = domain
-                    .create_agent(&principal, body, &facts, now_ms())
-                    .await?;
-                return self
-                    .provision_creation(domain, gateway, &principal, created, &project.space_id)
-                    .await;
+                let agent = domain.create_agent(&principal, body, now_ms()).await?;
+                return Ok(
+                    json!({"commandState":if agent.state=="active" {"active"} else {"pending"},"creation":{"agent":agent},"pendingReason":null}),
+                );
             }
             let parts = path.split('/').collect::<Vec<_>>();
+            if parts.len() == 7
+                && parts[4] == "agents"
+                && parts[6] == "owner-direct"
+                && method == salvo::http::Method::GET
+            {
+                let agent = domain.agent(&principal, parts[5], now_ms()).await?;
+                let binding = domain
+                    .bindings(&principal, &agent.id, now_ms())
+                    .await?
+                    .into_iter()
+                    .find(|b| b.scope_kind == "owner_direct");
+                return Ok(
+                    json!({"ownerDirectRoomId":agent.owner_direct_room_id,"binding":binding}),
+                );
+            }
+            if parts.len() == 7
+                && parts[4] == "agents"
+                && parts[6] == "owner-direct"
+                && method == salvo::http::Method::POST
+            {
+                if !self.startup_ready() {
+                    return Err(Error::Unavailable("appservice_startup_not_ready"));
+                }
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct OwnerDirect {
+                    room_id: String,
+                }
+                let body: OwnerDirect = req
+                    .parse_json()
+                    .await
+                    .map_err(|_| Error::Invalid("invalid_arguments"))?;
+                let agent = domain.agent(&principal, parts[5], now_ms()).await?;
+                let facts = gateway
+                    .room(&body.room_id, "", &principal.mxid, Some(&agent.puppet_mxid))
+                    .await?;
+                let creation = domain
+                    .adopt_owner_direct(&principal, &agent.id, &body.room_id, &facts, now_ms())
+                    .await?;
+                return Ok(
+                    json!({"ownerDirectRoomId":body.room_id,"commandState":if creation.binding.state=="active" {"active"}else{"pending"},"creation":creation}),
+                );
+            }
+            if parts.len() == 7 && parts[4] == "agents" && parts[6] == "execution-instance" {
+                if method == salvo::http::Method::GET {
+                    return Ok(
+                        json!({"executionInstance":domain.execution_instance(&principal,parts[5],now_ms()).await?}),
+                    );
+                }
+                if method == salvo::http::Method::PUT {
+                    let body: crate::domain::SetExecutionInstance = req
+                        .parse_json()
+                        .await
+                        .map_err(|_| Error::Invalid("invalid_arguments"))?;
+                    return Ok(
+                        json!({"executionInstance":domain.set_execution_instance(&principal,parts[5],body,now_ms()).await?}),
+                    );
+                }
+            }
+
             if parts.len() == 7
                 && parts[4] == "projects"
                 && parts[6] == "rooms"
@@ -379,9 +434,14 @@ impl App {
                 let creation = domain
                     .command_status(&principal, parts[5], parts[6], now_ms())
                     .await?;
-                let state = match creation.binding.state.as_str() {
+                let state = match creation
+                    .binding
+                    .as_ref()
+                    .map(|b| b.state.as_str())
+                    .unwrap_or(creation.agent.state.as_str())
+                {
                     "active" => "active",
-                    "joining" => "pending",
+                    "joining" | "creating" => "pending",
                     other => other,
                 };
                 return Ok(
@@ -410,13 +470,19 @@ impl App {
                         let agent = domain
                             .agent(&principal, &binding.agent_id, now_ms())
                             .await?;
-                        let project = domain
-                            .project(&principal, &binding.project_id, now_ms())
-                            .await?;
+                        let space = match &binding.project_id {
+                            Some(project) => {
+                                domain
+                                    .project(&principal, project, now_ms())
+                                    .await?
+                                    .space_id
+                            }
+                            None => String::new(),
+                        };
                         let facts = gateway
                             .room(
                                 &binding.room_id,
-                                &project.space_id,
+                                &space,
                                 &principal.mxid,
                                 Some(&agent.puppet_mxid),
                             )
@@ -456,12 +522,17 @@ impl App {
                 && method == salvo::http::Method::GET
             {
                 let project = domain.project(&principal, parts[5], now_ms()).await?;
-                if !gateway.visible(&project.space_id, &principal.mxid).await? {
+                let facts = gateway
+                    .admin(&project.space_id, &principal.mxid, None)
+                    .await?;
+                if !facts.joined {
                     return Err(Error::Unauthorized("project_membership_required"));
                 }
-                return domain
+                let mut state = domain
                     .service_state(&principal, &project.id, None, now_ms())
-                    .await;
+                    .await?;
+                state["canManagePolicy"] = json!(facts.is_space && facts.can_manage_policy);
+                return Ok(state);
             }
             if parts.len() == 7
                 && parts[4] == "projects"
@@ -534,9 +605,18 @@ impl App {
                     {
                         return Err(Error::Unauthorized("room_membership_required"));
                     }
-                    return domain
+                    let facts = gateway
+                        .admin(&room, &principal.mxid, Some(&project.space_id))
+                        .await?;
+                    let mut state = domain
                         .service_state(&principal, &project.id, Some(&room), now_ms())
-                        .await;
+                        .await?;
+                    state["canManagePolicy"] = json!(
+                        facts.joined
+                            && facts.linked_space_id.as_deref() == Some(project.space_id.as_str())
+                            && facts.can_manage_policy
+                    );
+                    return Ok(state);
                 }
                 let facts = gateway
                     .admin(room.as_str(), &principal.mxid, Some(&project.space_id))

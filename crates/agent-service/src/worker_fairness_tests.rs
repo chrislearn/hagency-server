@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    domain::{AdminFacts, BindRoom, CreateAgent, DomainStore, RoomFacts},
+    domain::{AdminFacts, BindRoom, CreateBoundAgent, DomainStore, RoomFacts},
     identity::Identity,
     store::{RegisterDevice, Store},
     transport::{DeliveryFacts, LeaseRef, Limits, SubmitReply},
@@ -16,7 +16,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, SimpleAsyncC
 async fn postgres_unavailable_room_does_not_starve_routing_or_unknown_replies() {
     // This test runs real global worker scans, so isolate it from parallel tests.
     let source = std::env::var("HAGENCY_AGENT_TEST_DATABASE_URL").unwrap();
-    let name = format!("hagency_fair_{}", &crate::hash(&crate::token())[..16]);
+    let name = format!("hagency_fair_{}", &crate::hash(&crate::secret_token())[..16]);
     let mut control = AsyncPgConnection::establish(&source).await.unwrap();
     control
         .batch_execute(&format!("CREATE DATABASE {name}"))
@@ -87,6 +87,7 @@ async fn exercise(url: &str) {
             .unwrap();
     }
     let room_facts = |room: &str, puppet: Option<&str>| RoomFacts {
+        owner_direct_valid: false,
         owner_mxid: owner.mxid.clone(),
         room_id: room.into(),
         space_id: space.into(),
@@ -100,9 +101,9 @@ async fn exercise(url: &str) {
         encrypted: false,
     };
     let created = domain
-        .create_agent(
+        .create_bound_agent(
             &owner,
-            CreateAgent {
+            CreateBoundAgent {
                 project_id: project.id.clone(),
                 room_id: bad.into(),
                 display_name: "Fairness probe".into(),
@@ -244,6 +245,19 @@ async fn exercise(url: &str) {
         .await
         .unwrap();
     let p = auth.authenticate(&device.token, now, true).await.unwrap();
+    domain
+        .set_execution_instance(
+            &owner,
+            &created.agent.id,
+            crate::domain::SetExecutionInstance {
+                device_id: p.device_id.clone().unwrap(),
+                name: "Worker test".into(),
+                expected_generation: 0,
+            },
+            now,
+        )
+        .await
+        .unwrap();
     let lease = transport
         .acquire_for_test(&p, &created.agent.id, 60_000, false, now)
         .await
@@ -253,6 +267,7 @@ async fn exercise(url: &str) {
         epoch: lease.epoch,
     };
     let delivery = |room: &str| DeliveryFacts {
+        owner_direct_valid: false,
         owner_mxid: p.mxid.clone(),
         requester_mxid: p.mxid.clone(),
         puppet_mxid: created.agent.puppet_mxid.clone(),

@@ -724,6 +724,9 @@ fn allowed_operation(method: &str, path: &str) -> bool {
             "pause-service" | "clear-service-pause",
         ] => method == "POST",
         ["projects", _, "rooms", "adopt"] => method == "POST",
+        ["devices"] => method == "GET",
+        ["agents", _, "execution-instance"] => method == "GET" || method == "PUT",
+        ["agents", _, "owner-direct"] => method == "GET" || method == "POST",
         ["agents"] => method == "GET" || method == "POST",
         ["agents", _] => method == "GET" || method == "DELETE",
         ["agents", _, "bindings"] => method == "GET" || method == "POST",
@@ -751,6 +754,11 @@ mod tests {
                 "POST",
                 "projects/p_1/rooms/%21r%3Aserver/clear-service-pause",
             ),
+            ("GET", "devices"),
+            ("GET", "agents/a_1/execution-instance"),
+            ("PUT", "agents/a_1/execution-instance"),
+            ("GET", "agents/a_1/owner-direct"),
+            ("POST", "agents/a_1/owner-direct"),
             ("GET", "agents"),
             ("POST", "agents"),
             ("PUT", "projects/p_1/creation-policy"),
@@ -776,6 +784,13 @@ mod tests {
             assert!(!allowed_operation("POST", path));
         }
         assert!(!allowed_operation("POST", "agents/a_1"));
+        assert!(!allowed_operation("POST", "agents/a_1/execution-instance"));
+        assert!(!allowed_operation("PUT", "agents/a_1/owner-direct"));
+        assert!(!allowed_operation("GET", "devices/d_1/token"));
+        assert!(!allowed_operation(
+            "POST",
+            "agents/a_1/execution-instance/extra"
+        ));
     }
     async fn fixture() -> (
         BrowserAuth,

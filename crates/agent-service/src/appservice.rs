@@ -318,7 +318,7 @@ mod tests {
             .await
             .unwrap();
         let inbox = Inbox::open(&url, "h".repeat(64)).await.unwrap();
-        let id = crate::token();
+        let id = crate::secret_token();
         inbox.accept(&id, json!({"events":[]}), 1).await.unwrap();
         inbox.accept(&id, json!({"events":[]}), 2).await.unwrap();
         assert!(
@@ -346,7 +346,7 @@ mod tests {
         use salvo::test::TestClient;
         let url = format!(
             "http://example.test/_matrix/app/v1/transactions/{}",
-            crate::token()
+            crate::secret_token()
         );
         let denied = TestClient::put(&url)
             .json(&json!({"events":[]}))
@@ -367,13 +367,13 @@ mod tests {
             .await
             .unwrap();
         let inbox = Inbox::open(&url, "h".repeat(64)).await.unwrap();
-        let room = format!("!probe_{}:example.test", crate::token());
+        let room = format!("!probe_{}:example.test", crate::secret_token());
         inbox.retain_probe_room(&room).await.unwrap();
         // Obtain the shared first-writer probe room; other tests may open Inbox.
         let room = inbox.probe_room().await.unwrap().unwrap();
-        let event = format!("${}", crate::token());
+        let event = format!("${}", crate::secret_token());
         let body = json!({"events":[{"type":"m.room.message","room_id":room,"sender":"@_hagency_service:example.test","event_id":event,"content":{"msgtype":"m.notice","body":"Hagency service readiness probe"}}]});
-        let id = crate::token();
+        let id = crate::secret_token();
         inbox
             .accept(&id, body.clone(), crate::api::now_ms())
             .await
@@ -406,8 +406,8 @@ mod tests {
                 .unwrap();
         assert_eq!(stored.body, json!({"events":[]}));
         assert!(!inbox.pending().await.unwrap().iter().any(|t| t.id == id));
-        let impostor_id = crate::token();
-        let impostor_event = format!("${}", crate::token());
+        let impostor_id = crate::secret_token();
+        let impostor_event = format!("${}", crate::secret_token());
         inbox.accept(&impostor_id, json!({"events":[{"type":"m.room.message","room_id":room,"sender":"@xhagencyxservice:example.test","event_id":impostor_event,"content":{"msgtype":"m.notice","body":"Hagency service readiness probe"}}]}), crate::api::now_ms()).await.unwrap();
         inbox.routed(&impostor_id).await.unwrap();
         assert!(!inbox.observed_event(&impostor_event).await.unwrap());

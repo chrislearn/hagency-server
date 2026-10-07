@@ -71,3 +71,17 @@ binding generation、sender/Room/thread、正文摘要和 Matrix transaction ID 
 原 identity/payload/txn，并对未发送 intent 核对 deliveryEpoch 等于当前租约。没有
 已知结果的 unknown execution 不能靠该接口自动重新运行或结算。操作审计仍归于
 永久 owner。旧开发版缺少 delivery_epoch 的 schema 会在 open 时明确拒绝，不做迁移。
+
+## Owner-direct context and reply shape
+
+For newly routed owner-direct plaintext messages without an explicit Matrix thread,
+`threadRoot` is the exact Room ID (`!…`): it is a durable logical conversation key,
+not a Matrix event ID. This shares one local conversation within that binding and
+requester scope. The worker emits a flat `m.text` reply without `m.relates_to` only
+when the trusted binding is owner-direct and the stored root equals its Room ID.
+Explicit threads and Project requests keep event roots (`$…`) and threaded replies.
+Old event-root queue/outbox entries remain unchanged, including their stable send
+transaction and content. Unknown-send recovery retains this original reply shape;
+a trusted flat-send observation uses the persisted Room context as its root.
+
+New server-allocated entity IDs use lowercase monotonic ULIDs with type prefixes. Dispatch and reply entity IDs follow `evt_<ulid>` and `rep_<ulid>`; Matrix IDs, payload digests and immutable Matrix transaction IDs retain their existing semantics. Session/device bearer tokens and worker claims continue to use independent 256-bit random values. Within-process ID order is not a distributed execution or commit order.

@@ -9,6 +9,18 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+/// The durable context root fixes reply shape for the lifetime of the intent.
+/// Only newly routed top-level owner DMs store their exact Room ID here; old
+/// event-root intents retain their original thread content and transaction ID.
+fn reply_content(owner_direct: bool, room: &str, root: &str, body: &str) -> Value {
+    let mut content = json!({"msgtype":"m.text","body":body});
+    if !owner_direct || root != room {
+        content["m.relates_to"] = json!({"rel_type":"m.thread","event_id":root,
+            "is_falling_back":true,"m.in_reply_to":{"event_id":root}});
+    }
+    content
+}
+
 /// Only canonical plaintext text events enter the model queue. In particular,
 /// HTML-looking mentions, edits, and encrypted bodies do not create prompts.
 fn parse_event(raw: &Value) -> Option<RoutedEvent> {
@@ -191,9 +203,12 @@ async fn send(
             .worker_token
             .as_deref()
             .ok_or(Error::Unavailable("missing_sender_claim"))?;
-        let content = json!({"msgtype":"m.text","body":intent.body,
-            "m.relates_to":{"rel_type":"m.thread","event_id":intent.thread_root,
-                "is_falling_back":true,"m.in_reply_to":{"event_id":intent.thread_root}}});
+        let content = reply_content(
+            scope.space_id.is_empty(),
+            &intent.room_id,
+            &intent.thread_root,
+            &intent.body,
+        );
         let outcome = m
             .send(
                 &intent.puppet_mxid,
@@ -249,6 +264,7 @@ pub(crate) fn start_cleanup(
         let mut cursor = String::new();
         let mut leader = false;
         let mut cleanup_cursor = (String::new(), String::new());
+        let mut identity_cursor = String::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -257,6 +273,19 @@ pub(crate) fn start_cleanup(
                 leader = domain.try_membership_controller().await.unwrap_or(false);
                 if !leader {
                     continue;
+                }
+            }
+            if let Ok(agents) = domain
+                .identity_provisioning_candidates(&identity_cursor, 20)
+                .await
+            {
+                for agent in agents {
+                    identity_cursor = agent.id.clone();
+                    if m.provision_identity(&agent).await.is_ok() {
+                        let _ = domain
+                            .confirm_identity_provisioned(&agent.id, agent.generation)
+                            .await;
+                    }
                 }
             }
             // Fair full cursor sweep includes already-left bindings. Matrix can
@@ -417,6 +446,19 @@ pub(crate) fn start_cleanup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn durable_reply_root_preserves_flat_dm_and_historical_threads() {
+        let flat = reply_content(true, "!dm:x", "!dm:x", "reply");
+        assert_eq!(flat, json!({"msgtype":"m.text","body":"reply"}));
+        let legacy = reply_content(true, "!dm:x", "$original", "reply");
+        assert_eq!(legacy["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(legacy["m.relates_to"]["event_id"], "$original");
+        assert_eq!(
+            legacy,
+            reply_content(false, "!project:x", "$original", "reply")
+        );
+        assert_eq!(legacy, reply_content(true, "!dm:x", "$original", "reply"));
+    }
     #[test]
     fn canonical_mentions_and_threads_only() {
         let raw = json!({"type":"m.room.message","event_id":"$e","room_id":"!r:x","sender":"@u:x",

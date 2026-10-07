@@ -1,5 +1,46 @@
 use super::*;
-use crate::{identity::Identity, store::Store};
+use crate::{identity::Identity, secret_token, store::Store};
+// Tests needing a discussion scope explicitly issue two independent commands.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CreateBoundAgent {
+    pub project_id: String,
+    pub room_id: String,
+    pub display_name: String,
+    pub idempotency_key: String,
+}
+impl DomainStore {
+    pub(crate) async fn create_bound_agent(
+        &self,
+        p: &Principal,
+        input: CreateBoundAgent,
+        f: &RoomFacts,
+        now: i64,
+    ) -> Result<AgentBinding> {
+        let agent = self
+            .create_agent(
+                p,
+                CreateAgent {
+                    display_name: input.display_name,
+                    idempotency_key: input.idempotency_key.clone(),
+                },
+                now,
+            )
+            .await?;
+        self.bind_room(
+            p,
+            &agent.id,
+            BindRoom {
+                project_id: input.project_id,
+                room_id: input.room_id,
+                idempotency_key: input.idempotency_key,
+            },
+            f,
+            now,
+        )
+        .await
+    }
+}
 static NOW: std::sync::LazyLock<i64> = std::sync::LazyLock::new(crate::api::now_ms);
 fn admin(p: &Principal, room: &str, space: bool, parent: Option<&str>) -> AdminFacts {
     AdminFacts {
@@ -14,6 +55,7 @@ fn admin(p: &Principal, room: &str, space: bool, parent: Option<&str>) -> AdminF
 }
 fn facts(p: &Principal, space: &str, room: &str, puppet: Option<&str>) -> RoomFacts {
     RoomFacts {
+        owner_direct_valid: false,
         owner_mxid: p.mxid.clone(),
         room_id: room.into(),
         space_id: space.into(),
@@ -55,7 +97,7 @@ async fn postgres_domain_ownership_policy_isolation_and_lifecycle() {
     let store = DomainStore::open(&url, "example.test", "_hagency_test_")
         .await
         .unwrap();
-    let suffix = token();
+    let suffix = secret_token();
     let (credential, p) = user(&auth, &suffix, "alice").await;
     let (_, other) = user(&auth, &suffix, "bob").await;
     let space1 = format!("!space1_{suffix}:example.test");
@@ -102,17 +144,20 @@ async fn postgres_domain_ownership_policy_isolation_and_lifecycle() {
         )
         .await
         .unwrap();
-    let request = || CreateAgent {
+    let request = || CreateBoundAgent {
         project_id: project1.id.clone(),
         room_id: room1.clone(),
         display_name: "Codex".into(),
         idempotency_key: "create-test".into(),
     };
     let f1 = facts(&p, &space1, &room1, None);
-    let created = store.create_agent(&p, request(), &f1, *NOW).await.unwrap();
+    let created = store
+        .create_bound_agent(&p, request(), &f1, *NOW)
+        .await
+        .unwrap();
     assert_eq!(
         store
-            .create_agent(&p, request(), &f1, *NOW)
+            .create_bound_agent(&p, request(), &f1, *NOW)
             .await
             .unwrap()
             .agent
@@ -142,7 +187,12 @@ async fn postgres_domain_ownership_policy_isolation_and_lifecycle() {
     );
     let mut changed = request();
     changed.display_name = "Other".into();
-    assert!(store.create_agent(&p, changed, &f1, *NOW).await.is_err());
+    assert!(
+        store
+            .create_bound_agent(&p, changed, &f1, *NOW)
+            .await
+            .is_err()
+    );
     assert!(store.agent(&other, &created.agent.id, *NOW).await.is_err());
     let joined1 = facts(&p, &space1, &room1, Some(&created.agent.puppet_mxid));
     store
@@ -213,7 +263,7 @@ async fn postgres_domain_ownership_policy_isolation_and_lifecycle() {
     fresh_request.idempotency_key = "new-denied".into();
     assert!(
         store
-            .create_agent(&p, fresh_request, &f1, *NOW)
+            .create_bound_agent(&p, fresh_request, &f1, *NOW)
             .await
             .is_err()
     );
@@ -336,7 +386,7 @@ async fn postgres_domain_ownership_policy_isolation_and_lifecycle() {
         .unwrap();
     assert_eq!(
         reopened
-            .create_agent(&p, request(), &f1, *NOW)
+            .create_bound_agent(&p, request(), &f1, *NOW)
             .await
             .unwrap()
             .agent
@@ -511,7 +561,7 @@ async fn postgres_device_principal_snapshot_is_rechecked_after_rotate_and_revoke
     let store = DomainStore::open(&url, "example.test", "_hagency_test_")
         .await
         .unwrap();
-    let suffix = token();
+    let suffix = secret_token();
     let (credential, p) = user(&auth, &suffix, "snapshot").await;
     let space = format!("!snapshot_space_{suffix}:example.test");
     let room = format!("!snapshot_room_{suffix}:example.test");
@@ -529,9 +579,9 @@ async fn postgres_device_principal_snapshot_is_rechecked_after_rotate_and_revoke
         .await
         .unwrap();
     let created = store
-        .create_agent(
+        .create_bound_agent(
             &p,
-            CreateAgent {
+            CreateBoundAgent {
                 project_id: project.id,
                 room_id: room.clone(),
                 display_name: "Snapshot agent".into(),
@@ -620,7 +670,7 @@ async fn postgres_stale_caller_clock_and_lock_wait_cannot_extend_session() {
     let store = DomainStore::open(&url, "example.test", "_hagency_test_")
         .await
         .unwrap();
-    let suffix = token();
+    let suffix = secret_token();
     let (_, p) = user(&auth, &suffix, "clock").await;
     let stale_now = crate::api::now_ms() - 10_000;
     let mut lock = AsyncPgConnection::establish(&url).await.unwrap();
@@ -647,7 +697,7 @@ async fn postgres_trusted_cleanup_converges_after_owner_logout_and_disable_witho
     let store = DomainStore::open(&url, "example.test", "_hagency_test_")
         .await
         .unwrap();
-    let suffix = token();
+    let suffix = secret_token();
     let (credential, p) = user(&auth, &suffix, "cleanup").await;
     let space = format!("!cleanup_space_{suffix}:example.test");
     let room = format!("!cleanup_room_{suffix}:example.test");
@@ -665,9 +715,9 @@ async fn postgres_trusted_cleanup_converges_after_owner_logout_and_disable_witho
         .await
         .unwrap();
     let created = store
-        .create_agent(
+        .create_bound_agent(
             &p,
-            CreateAgent {
+            CreateBoundAgent {
                 project_id: project.id,
                 room_id: room.clone(),
                 display_name: "Cleanup identity".into(),
@@ -823,7 +873,7 @@ async fn postgres_committed_provisioning_survives_logout_and_terminal_sweep_reta
     let domain = DomainStore::open(&url, "example.test", "_hagency_test_")
         .await
         .unwrap();
-    let suffix = token();
+    let suffix = secret_token();
     let (credential, p) = user(&auth, &suffix, "reconcile").await;
     let space = format!("!reconcile_space_{suffix}:example.test");
     let room = format!("!reconcile_room_{suffix}:example.test");
@@ -841,9 +891,9 @@ async fn postgres_committed_provisioning_survives_logout_and_terminal_sweep_reta
         .await
         .unwrap();
     let created = domain
-        .create_agent(
+        .create_bound_agent(
             &p,
-            CreateAgent {
+            CreateBoundAgent {
                 project_id: project.id,
                 room_id: room.clone(),
                 display_name: "Codex".into(),
@@ -973,7 +1023,7 @@ async fn postgres_scope_pause_blocks_empty_scope_and_preserves_creation_runtime_
     let store = DomainStore::open(&url, "example.test", "_hagency_test_")
         .await
         .unwrap();
-    let suffix = token();
+    let suffix = secret_token();
     let (_, p) = user(&auth, &suffix, "pause_owner").await;
     let space = format!("!pause_space_{suffix}:example.test");
     let room = format!("!pause_room_{suffix}:example.test");
@@ -990,7 +1040,7 @@ async fn postgres_scope_pause_blocks_empty_scope_and_preserves_creation_runtime_
         .register_room(&p, &project.id, &room2, &a, &ra2, *NOW)
         .await
         .unwrap();
-    let create = |key: &str| CreateAgent {
+    let create = |key: &str| CreateBoundAgent {
         project_id: project.id.clone(),
         room_id: room.clone(),
         display_name: "Scope pause probe".into(),
@@ -1006,13 +1056,13 @@ async fn postgres_scope_pause_blocks_empty_scope_and_preserves_creation_runtime_
     );
     assert!(matches!(
         store
-            .create_agent(&p, create("blocked-empty-project"), &f, *NOW)
+            .create_bound_agent(&p, create("blocked-empty-project"), &f, *NOW)
             .await,
         Err(Error::Unauthorized("administrator_pause_active"))
     ));
     assert!(
         store
-            .command_status(&p, "agent.create", "blocked-empty-project", *NOW)
+            .command_status(&p, "agent.bind", "blocked-empty-project", *NOW)
             .await
             .is_err()
     );
@@ -1033,7 +1083,7 @@ async fn postgres_scope_pause_blocks_empty_scope_and_preserves_creation_runtime_
     assert_eq!(merged["roomPaused"], false);
     assert!(
         store
-            .create_agent(&p, create("blocked-remaining-project"), &f, *NOW)
+            .create_bound_agent(&p, create("blocked-remaining-project"), &f, *NOW)
             .await
             .is_err()
     );
@@ -1042,7 +1092,7 @@ async fn postgres_scope_pause_blocks_empty_scope_and_preserves_creation_runtime_
         .await
         .unwrap();
     let created = store
-        .create_agent(&p, create("pause-active"), &f, *NOW)
+        .create_bound_agent(&p, create("pause-active"), &f, *NOW)
         .await
         .unwrap();
     let joined = facts(&p, &space, &room, Some(&created.agent.puppet_mxid));
@@ -1076,7 +1126,7 @@ async fn postgres_scope_pause_blocks_empty_scope_and_preserves_creation_runtime_
     );
     assert!(matches!(
         store
-            .create_agent(&p, create("blocked-disabled"), &f, *NOW)
+            .create_bound_agent(&p, create("blocked-disabled"), &f, *NOW)
             .await,
         Err(Error::Unauthorized("agent_creation_denied"))
     ));
@@ -1136,6 +1186,7 @@ async fn postgres_scope_pause_blocks_empty_scope_and_preserves_creation_runtime_
             .await
             .unwrap()
             .binding
+            .unwrap()
             .id,
         second.binding.id
     );
@@ -1180,7 +1231,7 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
         .await
         .unwrap();
     let transport = TransportStore::open(&url, Limits::default()).await.unwrap();
-    let suffix = token();
+    let suffix = secret_token();
     let (credential, p) = user(&auth, &suffix, "member_loss").await;
     let mut bindings = Vec::new();
     let mut created_agent: Option<String> = None;
@@ -1202,9 +1253,9 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
             .unwrap();
         let creation = match &created_agent {
             None => domain
-                .create_agent(
+                .create_bound_agent(
                     &p,
-                    CreateAgent {
+                    CreateBoundAgent {
                         project_id: project.id.clone(),
                         room_id: room.clone(),
                         display_name: "membership".into(),
@@ -1260,6 +1311,19 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
         .await
         .unwrap();
     let dp = auth.authenticate(&device.token, *NOW, true).await.unwrap();
+    domain
+        .set_execution_instance(
+            &p,
+            &agent_id,
+            SetExecutionInstance {
+                device_id: dp.device_id.clone().unwrap(),
+                name: "Membership instance".into(),
+                expected_generation: 0,
+            },
+            *NOW,
+        )
+        .await
+        .unwrap();
     let lease = transport
         .acquire_for_test(&dp, &agent_id, 60_000, false, *NOW)
         .await
@@ -1270,6 +1334,7 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
     };
     let (b, good) = &bindings[0];
     let delivery = DeliveryFacts {
+        owner_direct_valid: false,
         owner_mxid: p.mxid.clone(),
         requester_mxid: p.mxid.clone(),
         puppet_mxid: good.puppet_mxid.clone().unwrap(),
@@ -1458,7 +1523,7 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
 async fn postgres_retirement_cursor_passes_twenty_unavailable_departures() {
     let source = std::env::var("HAGENCY_AGENT_TEST_DATABASE_URL").unwrap();
     let mut control = AsyncPgConnection::establish(&source).await.unwrap();
-    let name = format!("hagency_retirement_{}", &hash(&token())[..16]);
+    let name = format!("hagency_retirement_{}", &hash(&secret_token())[..16]);
     control
         .batch_execute(&format!("CREATE DATABASE {name}"))
         .await
@@ -1468,7 +1533,7 @@ async fn postgres_retirement_cursor_passes_twenty_unavailable_departures() {
     let result=tokio::spawn(async move {
         let auth=Store::open(isolated.as_str(),"example.test","https://example.test/_pasion/").await.unwrap();
         let domain=DomainStore::open(isolated.as_str(),"example.test","_hagency_test_").await.unwrap();
-        let (_,p)=user(&auth,&token(),"retire").await;
+        let (_,p)=user(&auth,&secret_token(),"retire").await;
         let project=domain.register_project(&p,"!space:example.test",&admin(&p,"!space:example.test",true,None),*NOW).await.unwrap();
         domain.register_room(&p,&project.id,"!room:example.test",&admin(&p,"!space:example.test",true,None),&admin(&p,"!room:example.test",false,Some("!space:example.test")),*NOW).await.unwrap();
         let mut db=AsyncPgConnection::establish(isolated.as_str()).await.unwrap();
@@ -1496,4 +1561,51 @@ async fn postgres_retirement_cursor_passes_twenty_unavailable_departures() {
         .await
         .unwrap();
     result.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated PostgreSQL database via HAGENCY_AGENT_TEST_DATABASE_URL"]
+async fn postgres_global_identity_create_needs_no_project_or_room_and_binding_is_separate() {
+    let url = std::env::var("HAGENCY_AGENT_TEST_DATABASE_URL").unwrap();
+    let auth = Store::open(&url, "example.test", "https://example.test/_pasion/")
+        .await
+        .unwrap();
+    let domain = DomainStore::open(&url, "example.test", "_hagency_test_")
+        .await
+        .unwrap();
+    let (_, p) = user(&auth, &secret_token(), "global_owner").await;
+    let make = || CreateAgent {
+        display_name: "Global Codex".into(),
+        idempotency_key: "global-identity".into(),
+    };
+    let agent = domain.create_agent(&p, make(), *NOW).await.unwrap();
+    crate::assert_entity_id(&agent.id, "agt_");
+    assert_eq!(agent.puppet_mxid, format!("@_hagency_test_{}:example.test", agent.id));
+    assert_eq!(agent.state, "creating");
+    assert_eq!(agent.owner_user_id, p.user_id);
+    assert!(
+        domain
+            .bindings(&p, &agent.id, *NOW)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        domain.create_agent(&p, make(), *NOW).await.unwrap().id,
+        agent.id
+    );
+    let command = domain
+        .command_status(&p, "agent.create", "global-identity", *NOW)
+        .await
+        .unwrap();
+    assert!(command.binding.is_none());
+    assert!(serde_json::from_value::<CreateAgent>(serde_json::json!({"displayName":"Global","idempotencyKey":"new","projectId":"prj_old","roomId":"!old:test"})).is_err(),"old combined Create contract is rejected");
+    domain
+        .confirm_identity_provisioned(&agent.id, agent.generation)
+        .await
+        .unwrap();
+    assert_eq!(
+        domain.agent(&p, &agent.id, *NOW).await.unwrap().state,
+        "active"
+    );
 }

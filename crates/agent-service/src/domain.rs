@@ -1,6 +1,6 @@
 //! New user-owned Agent domain. Matrix observations are produced only by the trusted
 //! homeserver gateway; request bodies cannot supply authorization facts.
-use crate::{Error, Result, hash, key, store::Principal, token};
+use crate::{Error, Result, entity_id, hash, key, store::Principal};
 
 use diesel::{
     sql_query,
@@ -18,6 +18,12 @@ use tokio::sync::Mutex;
 #[path = "domain_discovery.rs"]
 mod discovery;
 pub use discovery::RoomAgent;
+#[path = "execution_instances.rs"]
+mod execution_instances;
+#[path = "owner_direct.rs"]
+mod owner_direct;
+pub(crate) use execution_instances::require_assigned;
+pub use execution_instances::{ExecutionInstance, OwnerDevice, SetExecutionInstance};
 
 const MAX_FACT_AGE_MS: i64 = 30_000;
 
@@ -164,6 +170,7 @@ pub struct RoomFacts {
     pub puppet_mxid: Option<String>,
     pub puppet_in_room: bool,
     pub encrypted: bool,
+    pub owner_direct_valid: bool,
 }
 
 fn administer(p: &Principal, f: &AdminFacts, room: &str, now: i64) -> Result<()> {
@@ -182,9 +189,12 @@ fn membership(p: &Principal, f: &RoomFacts, room: &str, space: &str, now: i64) -
     if f.owner_mxid != p.mxid
         || f.room_id != room
         || f.space_id != space
-        || !f.owner_in_space
         || !f.owner_in_room
-        || !f.room_in_space
+        || (if space.is_empty() {
+            !f.owner_direct_valid
+        } else {
+            !f.owner_in_space || !f.room_in_space
+        })
     {
         return Err(Error::Unauthorized("room_membership_required"));
     }
@@ -268,6 +278,8 @@ pub struct Agent {
     pub state: String,
     #[diesel(sql_type=BigInt)]
     pub generation: i64,
+    #[diesel(sql_type=Nullable<Text>)]
+    pub owner_direct_room_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, diesel::QueryableByName)]
@@ -277,14 +289,16 @@ pub struct Binding {
     pub id: String,
     #[diesel(sql_type=Text)]
     pub agent_id: String,
-    #[diesel(sql_type=Text)]
-    pub project_id: String,
+    #[diesel(sql_type=Nullable<Text>)]
+    pub project_id: Option<String>,
     #[diesel(sql_type=Text)]
     pub room_id: String,
     #[diesel(sql_type=Text)]
     pub state: String,
     #[diesel(sql_type=BigInt)]
     pub generation: i64,
+    #[diesel(sql_type=Text)]
+    pub scope_kind: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -294,11 +308,16 @@ pub struct AgentBinding {
     pub binding: Binding,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCommand {
+    pub agent: Agent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding: Option<Binding>,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateAgent {
-    pub project_id: String,
-    pub room_id: String,
     pub display_name: String,
     pub idempotency_key: String,
 }
@@ -408,16 +427,13 @@ impl DomainStore {
 
             if !initialized.matched {
                 db.batch_execute(include_str!("domain_schema.sql")).await?;
+                db.batch_execute(include_str!("execution_instance_schema.sql")).await?;
+                db.batch_execute(include_str!("owner_direct_schema.sql")).await?;
             }
-
-            sql_query("INSERT INTO hagency_agent_v1.domain_deployment(singleton,version,namespace) VALUES(true,1,$1) ON CONFLICT(singleton) DO NOTHING").bind::<Text,_>(namespace).execute(db).await?;
-
-            let fixed=sql_query("SELECT (version=1 AND namespace=$1) AS matched FROM hagency_agent_v1.domain_deployment WHERE singleton").bind::<Text,_>(namespace).get_result::<Flag>(db).await?;
-
-            if !fixed.matched {
-                return Err(Error::Conflict("deployment_identity_mismatch"));
-            }
-            let schema=sql_query("SELECT to_regclass('hagency_agent_v1.scope_pauses') IS NOT NULL AS matched").get_result::<Flag>(db).await?;
+            sql_query("INSERT INTO hagency_agent_v1.domain_deployment(singleton,version,namespace) VALUES(true,2,$1) ON CONFLICT(singleton) DO NOTHING").bind::<Text,_>(namespace).execute(db).await?;
+            let fixed=sql_query("SELECT (version=2 AND namespace=$1) AS matched FROM hagency_agent_v1.domain_deployment WHERE singleton").bind::<Text,_>(namespace).get_result::<Flag>(db).await?;
+            if !fixed.matched {return Err(Error::Conflict("domain_schema_incompatible"));}
+            let schema=sql_query("SELECT to_regclass('hagency_agent_v1.scope_pauses') IS NOT NULL AND to_regclass('hagency_agent_v1.execution_instances') IS NOT NULL AS matched").get_result::<Flag>(db).await?;
             if !schema.matched {return Err(Error::Conflict("domain_schema_incompatible"));}
             Ok(())
         }
@@ -497,11 +513,11 @@ impl DomainStore {
     }
 
     async fn agent_db(db: &mut AsyncPgConnection, p: &Principal, id: &str) -> Result<Agent> {
-        sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation FROM hagency_agent_v1.agents WHERE id=$1 AND owner_user_id=$2").bind::<Text,_>(id).bind::<Text,_>(&p.user_id).get_result(db).await.map_err(hidden)
+        sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id FROM hagency_agent_v1.agents WHERE id=$1 AND owner_user_id=$2").bind::<Text,_>(id).bind::<Text,_>(&p.user_id).get_result(db).await.map_err(hidden)
     }
 
     async fn binding_db(db: &mut AsyncPgConnection, p: &Principal, id: &str) -> Result<Binding> {
-        sql_query("SELECT b.id,b.agent_id,b.project_id,b.room_id,b.state,b.generation FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id WHERE b.id=$1 AND a.owner_user_id=$2").bind::<Text,_>(id).bind::<Text,_>(&p.user_id).get_result(db).await.map_err(hidden)
+        sql_query("SELECT b.id,b.agent_id,b.project_id,b.room_id,b.state,b.generation,b.scope_kind FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id WHERE b.id=$1 AND a.owner_user_id=$2").bind::<Text,_>(id).bind::<Text,_>(&p.user_id).get_result(db).await.map_err(hidden)
     }
 
     async fn policies(
@@ -529,6 +545,24 @@ impl DomainStore {
         Ok((project, pp, rp))
     }
 
+    async fn binding_policies(
+        db: &mut AsyncPgConnection,
+        b: &Binding,
+    ) -> Result<(String, CreationPolicy, RoomCreationPolicy)> {
+        if let Some(project) = &b.project_id {
+            let (p, pp, rp) = Self::policies(db, project, &b.room_id).await?;
+            return Ok((p.space_id, pp, rp));
+        }
+        let valid=sql_query("SELECT true AS matched FROM hagency_agent_v1.agents WHERE id=$1 AND owner_direct_room_id=$2").bind::<Text,_>(&b.agent_id).bind::<Text,_>(&b.room_id).get_result::<Flag>(db).await.map_err(hidden)?;
+        if b.scope_kind != "owner_direct" || !valid.matched {
+            return Err(Error::Unauthorized("direct_scope_invalid"));
+        }
+        Ok((
+            String::new(),
+            CreationPolicy::default(),
+            RoomCreationPolicy::default(),
+        ))
+    }
     pub async fn register_project(
         &self,
         p: &Principal,
@@ -549,7 +583,7 @@ impl DomainStore {
             Self::authorize(db, p, now).await?;
             administer(p, f, space, now)?;
 
-            let project=sql_query("INSERT INTO hagency_agent_v1.projects(id,space_id,creation_policy) VALUES($1,$2,$3) ON CONFLICT(space_id) DO UPDATE SET space_id=EXCLUDED.space_id RETURNING id,space_id,active,creation_policy,revision").bind::<Text,_>(format!("prj_{}",token())).bind::<Text,_>(space).bind::<Text,_>(encode(&CreationPolicy::default())?).get_result::<Project>(db).await?;
+            let project=sql_query("INSERT INTO hagency_agent_v1.projects(id,space_id,creation_policy) VALUES($1,$2,$3) ON CONFLICT(space_id) DO UPDATE SET space_id=EXCLUDED.space_id RETURNING id,space_id,active,creation_policy,revision").bind::<Text,_>(format!("prj_{}",entity_id()?)).bind::<Text,_>(space).bind::<Text,_>(encode(&CreationPolicy::default())?).get_result::<Project>(db).await?;
 
             Self::audit(db, p, "project.register", &project.id, now).await?;
             Ok(project)
@@ -662,7 +696,7 @@ impl DomainStore {
         operation: &str,
         command_key: &str,
         now: i64,
-    ) -> Result<AgentBinding> {
+    ) -> Result<AgentCommand> {
         if !matches!(operation, "agent.create" | "agent.bind") {
             return Err(Error::Invalid("unsupported_command"));
         }
@@ -670,8 +704,8 @@ impl DomainStore {
         let mut db = self.db.lock().await;
         (*db).transaction::<_,Error,_>(async |db:&mut AsyncPgConnection| {
             Self::authorize(db,p,now).await?;
-            let command=sql_query("SELECT digest,agent_id,binding_id FROM hagency_agent_v1.domain_commands WHERE actor_user_id=$1 AND operation=$2 AND key=$3").bind::<Text,_>(&p.user_id).bind::<Text,_>(operation).bind::<Text,_>(command_key).get_result::<Command>(db).await.map_err(hidden)?;
-            Self::replay(db,p,operation,command_key,&command.digest).await?.ok_or(Error::NotFound("command_not_found"))
+            let command=sql_query("SELECT digest,agent_id,binding_id FROM hagency_agent_v1.domain_commands WHERE actor_user_id=$1 AND operation=$2 AND key=$3").bind::<Text,_>(&p.user_id).bind::<Text,_>(operation).bind::<Text,_>(command_key).get_result::<Command>(db).await.optional()?.ok_or(Error::NotFound("command_not_found"))?;
+            Ok(AgentCommand {agent:Self::agent_db(db,p,&command.agent_id).await?,binding:match command.binding_id {Some(id)=>Some(Self::binding_db(db,p,&id).await?),None=>None}})
         }).await
     }
     async fn replay(
@@ -716,72 +750,53 @@ impl DomainStore {
         Ok(())
     }
 
+    /// Allocate only permanent owner-bound identity. Room admission is a separate command.
     pub async fn create_agent(
         &self,
         p: &Principal,
         request: CreateAgent,
-        f: &RoomFacts,
         now: i64,
-    ) -> Result<AgentBinding> {
-        key(&request.project_id)?;
-
+    ) -> Result<Agent> {
         key(&request.idempotency_key)?;
-
-        matrix_id(&request.room_id, '!')?;
-
         if request.display_name.trim().is_empty()
             || request.display_name.chars().count() > 64
             || request.display_name.chars().any(char::is_control)
         {
             return Err(Error::Invalid("invalid_agent_name"));
         }
-
         let digest = hash(&encode(&request)?);
-
         let mut db = self.db.lock().await;
-
-        (*db).transaction::<_,Error,_>(async move |db:&mut AsyncPgConnection| {
-
-            Self::authorize(db, p, now).await?;
-
-            if let Some(replay) =
-                Self::replay(db, p, "agent.create", &request.idempotency_key, &digest).await?
-            {
-                return Ok(replay);
+        (*db).transaction::<_,Error,_>(async |db:&mut AsyncPgConnection| {
+            Self::authorize(db,p,now).await?;
+            if let Some(command)=sql_query("SELECT digest,agent_id,binding_id FROM hagency_agent_v1.domain_commands WHERE actor_user_id=$1 AND operation='agent.create' AND key=$2").bind::<Text,_>(&p.user_id).bind::<Text,_>(&request.idempotency_key).get_result::<Command>(db).await.optional()? {
+                if command.digest!=digest {return Err(Error::Conflict("idempotency_key_reused"));}
+                return Self::agent_db(db,p,&command.agent_id).await;
             }
-
-            let (project, pp, rp) = Self::policies(db, &request.project_id, &request.room_id).await?;
-            creating(
-                p,
-                f,
-                &request.room_id,
-                &project.space_id,
-                &pp,
-                &rp,
-                None,
-                now,
-            )?;
-
-            let id = format!("agt_{}", token());
-            let mxid = format!("@{}{id}:{}", self.namespace, self.server);
-
-            let agent=sql_query("INSERT INTO hagency_agent_v1.agents(id,owner_user_id,puppet_mxid,display_name,state) VALUES($1,$2,$3,$4,'creating') RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation").bind::<Text,_>(&id).bind::<Text,_>(&p.user_id).bind::<Text,_>(mxid).bind::<Text,_>(request.display_name.trim()).get_result::<Agent>(db).await?;
-
-            let binding = Self::insert_binding(db, &id, &request.project_id, &request.room_id).await?;
-            Self::command(
-                db,
-                p,
-                "agent.create",
-                &request.idempotency_key,
-                &digest,
-                &id,
-                &binding.id,
-            )
-            .await?;
-            Self::audit(db, p, "agent.create", &id, now).await?;
-            Ok(AgentBinding { agent, binding })
+            let id=format!("agt_{}",entity_id()?);let mxid=format!("@{}{id}:{}",self.namespace,self.server);
+            let agent=sql_query("INSERT INTO hagency_agent_v1.agents(id,owner_user_id,puppet_mxid,display_name,state) VALUES($1,$2,$3,$4,'creating') RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id").bind::<Text,_>(&id).bind::<Text,_>(&p.user_id).bind::<Text,_>(mxid).bind::<Text,_>(request.display_name.trim()).get_result::<Agent>(db).await?;
+            sql_query("INSERT INTO hagency_agent_v1.domain_commands(actor_user_id,operation,key,digest,agent_id,binding_id) VALUES($1,'agent.create',$2,$3,$4,NULL)").bind::<Text,_>(&p.user_id).bind::<Text,_>(&request.idempotency_key).bind::<Text,_>(digest).bind::<Text,_>(&id).execute(db).await?;
+            Self::audit(db,p,"agent.create",&id,now).await?;Ok(agent)
+        }).await
+    }
+    pub async fn identity_provisioning_candidates(
+        &self,
+        after: &str,
+        limit: i64,
+    ) -> Result<Vec<Agent>> {
+        if !(1..=128).contains(&limit) {
+            return Err(Error::Invalid("invalid_limit"));
         }
-).await
+        let mut db = self.db.lock().await;
+        Ok(sql_query("SELECT a.id,a.owner_user_id,a.puppet_mxid,a.display_name,a.state,a.generation,a.owner_direct_room_id FROM hagency_agent_v1.agents a JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id WHERE a.state='creating' AND u.active ORDER BY (a.id<=$1),a.id LIMIT $2").bind::<Text,_>(after).bind::<BigInt,_>(limit).load(&mut *db).await?)
+    }
+    /// Only after the trusted worker verified the exact puppet through Matrix.
+    pub async fn confirm_identity_provisioned(&self, id: &str, generation: i64) -> Result<()> {
+        let mut db = self.db.lock().await;
+        (*db).transaction::<_,Error,_>(async |db:&mut AsyncPgConnection| {
+            db.batch_execute("SELECT pg_advisory_xact_lock(5210750088328904)").await?;
+            let n=sql_query("UPDATE hagency_agent_v1.agents a SET state='active' WHERE id=$1 AND generation=$2 AND state='creating' AND EXISTS(SELECT 1 FROM hagency_agent_v1.users u WHERE u.id=a.owner_user_id AND u.active)").bind::<Text,_>(id).bind::<BigInt,_>(generation).execute(db).await?;
+            if n!=1 {return Err(Error::Conflict("provisioning_intent_stale"));}Ok(())
+        }).await
     }
 
     async fn insert_binding(
@@ -790,7 +805,7 @@ impl DomainStore {
         project: &str,
         room: &str,
     ) -> Result<Binding> {
-        Ok(sql_query("INSERT INTO hagency_agent_v1.bindings(id,agent_id,project_id,room_id,state) VALUES($1,$2,$3,$4,'joining') RETURNING id,agent_id,project_id,room_id,state,generation").bind::<Text,_>(format!("bnd_{}",token())).bind::<Text,_>(agent).bind::<Text,_>(project).bind::<Text,_>(room).get_result(db).await?)
+        Ok(sql_query("INSERT INTO hagency_agent_v1.bindings(id,agent_id,project_id,room_id,state) VALUES($1,$2,$3,$4,'joining') RETURNING id,agent_id,project_id,room_id,state,generation,scope_kind").bind::<Text,_>(format!("bnd_{}",entity_id()?)).bind::<Text,_>(agent).bind::<Text,_>(project).bind::<Text,_>(room).get_result(db).await?)
     }
 
     pub async fn bind_room(
@@ -840,9 +855,10 @@ impl DomainStore {
                 now,
             )?;
 
-            let existing=sql_query("SELECT id,agent_id,project_id,room_id,state,generation FROM hagency_agent_v1.bindings WHERE agent_id=$1 AND room_id=$2").bind::<Text,_>(agent_id).bind::<Text,_>(&request.room_id).get_result::<Binding>(db).await.optional()?;
+            let existing=sql_query("SELECT id,agent_id,project_id,room_id,state,generation,scope_kind FROM hagency_agent_v1.bindings WHERE agent_id=$1 AND room_id=$2").bind::<Text,_>(agent_id).bind::<Text,_>(&request.room_id).get_result::<Binding>(db).await.optional()?;
 
             if let Some(b) = &existing {
+                if b.scope_kind!="project" || b.project_id.as_deref()!=Some(request.project_id.as_str()) {return Err(Error::Conflict("room_binding_scope_conflict"));}
                 let pause=sql_query("SELECT NOT (admin_project_paused OR admin_room_paused) AS matched FROM hagency_agent_v1.bindings WHERE id=$1").bind::<Text,_>(&b.id).get_result::<Flag>(db).await?;
                 if !pause.matched {
                     return Err(Error::Unauthorized("administrator_pause_active"));
@@ -850,7 +866,7 @@ impl DomainStore {
             }
 
             let binding=match existing {
-        Some(b) if matches!(b.state.as_str(),"joining"|"active"|"suspended")=>b,Some(b) if b.state=="left"=>sql_query("UPDATE hagency_agent_v1.bindings SET state='joining',generation=generation+1 WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation").bind::<Text,_>(&b.id).get_result(db).await?,Some(_)=>return Err(Error::Conflict("binding_not_bindable")),None=>Self::insert_binding(db,agent_id,&request.project_id,&request.room_id).await?}
+        Some(b) if matches!(b.state.as_str(),"joining"|"active"|"suspended")=>b,Some(b) if b.state=="left"=>sql_query("UPDATE hagency_agent_v1.bindings SET state='joining',generation=generation+1 WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation,scope_kind").bind::<Text,_>(&b.id).get_result(db).await?,Some(_)=>return Err(Error::Conflict("binding_not_bindable")),None=>Self::insert_binding(db,agent_id,&request.project_id,&request.room_id).await?}
         ;
 
             Self::command(
@@ -888,7 +904,7 @@ impl DomainStore {
         let db = &mut *guard;
         db.transaction::<_,Error,_>(async |db:&mut AsyncPgConnection| {
             db.batch_execute("SELECT pg_advisory_xact_lock(5210750088328904)").await?;
-            Ok(sql_query("SELECT a.id AS agent_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.state AS agent_state,a.generation AS agent_generation,b.id AS binding_id,b.state AS binding_state,b.generation AS binding_generation,b.room_id,p.space_id FROM hagency_agent_v1.agents a JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.bindings b ON b.agent_id=a.id AND b.state IN ('leaving','revoked') LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id WHERE (b.id IS NOT NULL OR (a.state='retiring' AND NOT EXISTS(SELECT 1 FROM hagency_agent_v1.bindings pending WHERE pending.agent_id=a.id AND pending.state<>'left'))) AND (a.id,coalesce(b.id,''))>($2,$3) ORDER BY a.id,coalesce(b.id,'') LIMIT $1").bind::<BigInt,_>(limit as i64).bind::<Text,_>(agent_cursor).bind::<Text,_>(binding_cursor).load(db).await?)
+            Ok(sql_query("SELECT a.id AS agent_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.state AS agent_state,a.generation AS agent_generation,b.id AS binding_id,b.state AS binding_state,b.generation AS binding_generation,b.room_id,coalesce(p.space_id,'') AS space_id FROM hagency_agent_v1.agents a JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.bindings b ON b.agent_id=a.id AND b.state IN ('leaving','revoked') LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id WHERE (b.id IS NOT NULL OR (a.state='retiring' AND NOT EXISTS(SELECT 1 FROM hagency_agent_v1.bindings pending WHERE pending.agent_id=a.id AND pending.state<>'left'))) AND (a.id,coalesce(b.id,''))>($2,$3) ORDER BY a.id,coalesce(b.id,'') LIMIT $1").bind::<BigInt,_>(limit as i64).bind::<Text,_>(agent_cursor).bind::<Text,_>(binding_cursor).load(db).await?)
         }).await
     }
     /// Session-scoped PostgreSQL lock elects one Matrix membership controller
@@ -913,7 +929,7 @@ impl DomainStore {
             return Err(Error::Invalid("invalid_cleanup_limit"));
         }
         let mut db = self.db.lock().await;
-        Ok(sql_query("SELECT a.id AS agent_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.state AS agent_state,a.generation AS agent_generation,b.id AS binding_id,b.state AS binding_state,b.generation AS binding_generation,b.room_id,p.space_id FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id JOIN hagency_agent_v1.projects p ON p.id=b.project_id WHERE b.id>$1 AND b.state IN ('joining','active','leaving','left','revoked') ORDER BY b.id LIMIT $2")
+        Ok(sql_query("SELECT a.id AS agent_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.state AS agent_state,a.generation AS agent_generation,b.id AS binding_id,b.state AS binding_state,b.generation AS binding_generation,b.room_id,coalesce(p.space_id,'') AS space_id FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id WHERE b.id>$1 AND b.state IN ('joining','active','leaving','left','revoked') ORDER BY b.id LIMIT $2")
             .bind::<Text,_>(after).bind::<BigInt,_>(limit as i64).load(&mut *db).await?)
     }
     /// Commit a fresh, trusted loss of running membership. This never resumes a
@@ -983,7 +999,7 @@ impl DomainStore {
             #[diesel(sql_type=Bool)]
             active: bool,
         }
-        let s = sql_query("SELECT a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,b.room_id,p.space_id,b.state,b.generation,(u.active AND p.active AND r.active) AS active FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id JOIN hagency_agent_v1.projects p ON p.id=b.project_id JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.id=$1")
+        let s = sql_query("SELECT a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,b.room_id,coalesce(p.space_id,'') AS space_id,b.state,b.generation,(u.active AND ((b.scope_kind='project' AND p.active AND r.active) OR (b.scope_kind='owner_direct' AND a.owner_direct_room_id=b.room_id))) AS active FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id LEFT JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.id=$1")
             .bind::<Text,_>(id).get_result::<Scope>(db).await.map_err(hidden)?;
         fresh(f.observed_at_ms, now)?;
         if generation.is_some_and(|g| g != s.generation)
@@ -996,10 +1012,13 @@ impl DomainStore {
         }
         if s.state != "active"
             || (s.active
-                && f.owner_in_space
                 && f.owner_in_room
                 && f.puppet_in_room
-                && f.room_in_space)
+                && (if s.space_id.is_empty() {
+                    f.owner_direct_valid
+                } else {
+                    f.owner_in_space && f.room_in_space
+                }))
         {
             return Ok(false);
         }
@@ -1027,9 +1046,9 @@ impl DomainStore {
         let mut db = self.db.lock().await;
         (*db).transaction::<_,Error,_>(async |db: &mut AsyncPgConnection| {
             db.batch_execute("SELECT pg_advisory_xact_lock(5210750088328904)").await?;
-            let b=sql_query("SELECT id,agent_id,project_id,room_id,state,generation FROM hagency_agent_v1.bindings WHERE id=$1").bind::<Text,_>(id).get_result::<Binding>(db).await.map_err(hidden)?;
-            let a=sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation FROM hagency_agent_v1.agents WHERE id=$1").bind::<Text,_>(&b.agent_id).get_result::<Agent>(db).await?;
-            let (project,pp,rp)=Self::policies(db,&b.project_id,&b.room_id).await?;
+            let b=sql_query("SELECT id,agent_id,project_id,room_id,state,generation,scope_kind FROM hagency_agent_v1.bindings WHERE id=$1").bind::<Text,_>(id).get_result::<Binding>(db).await.map_err(hidden)?;
+            let a=sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id FROM hagency_agent_v1.agents WHERE id=$1").bind::<Text,_>(&b.agent_id).get_result::<Agent>(db).await?;
+            let (space,pp,rp)=Self::binding_policies(db,&b).await?;
             #[derive(diesel::QueryableByName)] struct Owner { #[diesel(sql_type=Text)] mxid:String, #[diesel(sql_type=Bool)] active:bool }
             let owner=sql_query("SELECT mxid,active FROM hagency_agent_v1.users WHERE id=$1").bind::<Text,_>(&a.owner_user_id).get_result::<Owner>(db).await?;
             fresh(f.observed_at_ms,now)?;
@@ -1037,11 +1056,11 @@ impl DomainStore {
             if b.generation!=generation || b.state!="joining" || !matches!(a.state.as_str(),"creating"|"active"|"suspended") || !owner.active || !enabled.matched {
                 return Err(Error::Conflict("provisioning_intent_stale"));
             }
-            if f.owner_mxid!=owner.mxid || f.room_id!=b.room_id || f.space_id!=project.space_id || f.puppet_mxid.as_deref()!=Some(&a.puppet_mxid) || !f.owner_in_space || !f.owner_in_room || !f.room_in_space || !pp.permits(&owner.mxid) || !rp.permits(&owner.mxid) {
+            if f.owner_mxid!=owner.mxid || f.room_id!=b.room_id || f.space_id!=space || f.puppet_mxid.as_deref()!=Some(&a.puppet_mxid) || !f.owner_in_room || (if space.is_empty() {!f.owner_direct_valid} else {!f.owner_in_space || !f.room_in_space}) || !pp.permits(&owner.mxid) || !rp.permits(&owner.mxid) {
                 return Err(Error::Unauthorized("provisioning_authority_revoked"));
             }
             if f.encrypted { return Err(Error::Conflict("encrypted_room_requires_client_crypto")); }
-            if !f.puppet_in_room && !f.service_can_invite { return Err(Error::Unauthorized("service_invitation_denied")); }
+            if !f.puppet_in_room && !f.service_can_invite && !f.owner_direct_valid { return Err(Error::Unauthorized("service_invitation_denied")); }
             if activate {
                 if !f.puppet_in_room { return Err(Error::Conflict("puppet_join_not_confirmed")); }
                 sql_query("UPDATE hagency_agent_v1.bindings SET state='active' WHERE id=$1").bind::<Text,_>(id).execute(db).await?;
@@ -1064,16 +1083,16 @@ impl DomainStore {
         let db = &mut *guard;
         db.transaction::<_,Error,_>(async |db:&mut AsyncPgConnection| {
             db.batch_execute("SELECT pg_advisory_xact_lock(5210750088328904)").await?;
-            let b=sql_query("SELECT id,agent_id,project_id,room_id,state,generation FROM hagency_agent_v1.bindings WHERE id=$1").bind::<Text,_>(id).get_result::<Binding>(db).await.map_err(hidden)?;
-            let a=sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation FROM hagency_agent_v1.agents WHERE id=$1").bind::<Text,_>(&b.agent_id).get_result::<Agent>(db).await?;
-            let project=Self::project_db(db,&b.project_id).await?;
+            let b=sql_query("SELECT id,agent_id,project_id,room_id,state,generation,scope_kind FROM hagency_agent_v1.bindings WHERE id=$1").bind::<Text,_>(id).get_result::<Binding>(db).await.map_err(hidden)?;
+            let a=sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id FROM hagency_agent_v1.agents WHERE id=$1").bind::<Text,_>(&b.agent_id).get_result::<Agent>(db).await?;
+            let space=match &b.project_id {Some(project)=>Self::project_db(db,project).await?.space_id,None=>String::new()};
             #[derive(diesel::QueryableByName)] struct Owner {#[diesel(sql_type=Text)]mxid:String}
             let owner=sql_query("SELECT mxid FROM hagency_agent_v1.users WHERE id=$1").bind::<Text,_>(&a.owner_user_id).get_result::<Owner>(db).await?;
             fresh(f.observed_at_ms,now)?;
-            if b.generation!=generation||f.room_id!=b.room_id||f.space_id!=project.space_id||f.owner_mxid!=owner.mxid||f.puppet_mxid.as_deref()!=Some(&a.puppet_mxid)||f.puppet_in_room {return Err(Error::Conflict("puppet_departure_not_confirmed"));}
+            if b.generation!=generation||f.room_id!=b.room_id||f.space_id!=space||f.owner_mxid!=owner.mxid||f.puppet_mxid.as_deref()!=Some(&a.puppet_mxid)||f.puppet_in_room {return Err(Error::Conflict("puppet_departure_not_confirmed"));}
             if b.state=="left" {return Ok(b);}
             if !matches!(b.state.as_str(),"leaving"|"revoked") {return Err(Error::Conflict("binding_not_leaving"));}
-            let result=sql_query("UPDATE hagency_agent_v1.bindings SET state='left' WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation").bind::<Text,_>(id).get_result(db).await?;
+            let result=sql_query("UPDATE hagency_agent_v1.bindings SET state='left' WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation,scope_kind").bind::<Text,_>(id).get_result(db).await?;
             sql_query("INSERT INTO hagency_agent_v1.domain_audit(actor_user_id,operation,object_id,at_ms) VALUES($1,'worker.binding.left',$2,$3)").bind::<Text,_>(&a.owner_user_id).bind::<Text,_>(id).bind::<BigInt,_>(now.max(crate::api::now_ms())).execute(db).await?;Ok(result)
         }).await
     }
@@ -1089,13 +1108,13 @@ impl DomainStore {
         let db = &mut *guard;
         db.transaction::<_,Error,_>(async |db:&mut AsyncPgConnection| {
             db.batch_execute("SELECT pg_advisory_xact_lock(5210750088328904)").await?;
-            let a=sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation FROM hagency_agent_v1.agents WHERE id=$1").bind::<Text,_>(id).get_result::<Agent>(db).await.map_err(hidden)?;
+            let a=sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id FROM hagency_agent_v1.agents WHERE id=$1").bind::<Text,_>(id).get_result::<Agent>(db).await.map_err(hidden)?;
             if a.generation!=generation {return Err(Error::Conflict("stale_agent_generation"));}
             if a.state=="retired" {return Ok(a);}
             if a.state!="retiring" {return Err(Error::Conflict("agent_not_retiring"));}
             let departed=sql_query("SELECT NOT EXISTS(SELECT 1 FROM hagency_agent_v1.bindings WHERE agent_id=$1 AND state<>'left') AS matched").bind::<Text,_>(id).get_result::<Flag>(db).await?;
             if !departed.matched {return Err(Error::Conflict("agent_cleanup_incomplete"));}
-            let result=sql_query("UPDATE hagency_agent_v1.agents SET state='retired' WHERE id=$1 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation").bind::<Text,_>(id).get_result(db).await?;
+            let result=sql_query("UPDATE hagency_agent_v1.agents SET state='retired' WHERE id=$1 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id").bind::<Text,_>(id).get_result(db).await?;
             sql_query("INSERT INTO hagency_agent_v1.domain_audit(actor_user_id,operation,object_id,at_ms) VALUES($1,'worker.agent.retired',$2,$3)").bind::<Text,_>(&a.owner_user_id).bind::<Text,_>(id).bind::<BigInt,_>(now.max(crate::api::now_ms())).execute(db).await?;Ok(result)
         }).await
     }
@@ -1134,12 +1153,12 @@ impl DomainStore {
                 return Err(Error::Conflict("binding_not_joining"));
             }
 
-            let (project, pp, rp) = Self::policies(db, &b.project_id, &b.room_id).await?;
+            let (space, pp, rp) = Self::binding_policies(db, &b).await?;
             creating(
                 p,
                 f,
                 &b.room_id,
-                &project.space_id,
+                &space,
                 &pp,
                 &rp,
                 Some(&a.puppet_mxid),
@@ -1150,7 +1169,7 @@ impl DomainStore {
                 return Err(Error::Conflict("puppet_join_not_confirmed"));
             }
 
-            let b=sql_query("UPDATE hagency_agent_v1.bindings SET state='active' WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation").bind::<Text,_>(id).get_result(db).await?;
+            let b=sql_query("UPDATE hagency_agent_v1.bindings SET state='active' WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation,scope_kind").bind::<Text,_>(id).get_result(db).await?;
 
             sql_query("UPDATE hagency_agent_v1.agents SET state='active' WHERE id=$1 AND state='creating'")
                 .bind::<Text, _>(&a.id)
@@ -1184,9 +1203,9 @@ impl DomainStore {
                     return Err(Error::Unauthorized("agent_not_running"));
                 }
 
-                let (project, _, _) = Self::policies(db, &b.project_id, &b.room_id).await?;
+                let (space, _, _) = Self::binding_policies(db, &b).await?;
 
-                membership(p, f, &b.room_id, &project.space_id, now)?;
+                membership(p, f, &b.room_id, &space, now)?;
 
                 if !f.puppet_in_room || f.puppet_mxid.as_deref() != Some(&a.puppet_mxid) {
                     return Err(Error::Unauthorized("puppet_not_joined"));
@@ -1280,7 +1299,7 @@ impl DomainStore {
         (*db).transaction::<_,Error,_>(async move |db:&mut AsyncPgConnection|{
 
             Self::authorize(db, p, now).await?;
-            Ok(sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation FROM hagency_agent_v1.agents WHERE owner_user_id=$1 ORDER BY id").bind::<Text,_>(&p.user_id).load(db).await?)
+            Ok(sql_query("SELECT id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id FROM hagency_agent_v1.agents WHERE owner_user_id=$1 ORDER BY id").bind::<Text,_>(&p.user_id).load(db).await?)
         }
 ).await
     }
@@ -1292,7 +1311,7 @@ impl DomainStore {
 
             Self::authorize(db, p, now).await?;
             Self::agent_db(db, p, agent_id).await?;
-            Ok(sql_query("SELECT id,agent_id,project_id,room_id,state,generation FROM hagency_agent_v1.bindings WHERE agent_id=$1 ORDER BY id").bind::<Text,_>(agent_id).load(db).await?)
+            Ok(sql_query("SELECT id,agent_id,project_id,room_id,state,generation,scope_kind FROM hagency_agent_v1.bindings WHERE agent_id=$1 ORDER BY id").bind::<Text,_>(agent_id).load(db).await?)
         }
 ).await
     }
@@ -1328,7 +1347,7 @@ impl DomainStore {
                 return Err(Error::Conflict("agent_transition_denied"));
             }
 
-            let a=sql_query("UPDATE hagency_agent_v1.agents SET state=$1,generation=generation+1 WHERE id=$2 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation").bind::<Text,_>(target).bind::<Text,_>(id).get_result(db).await?;
+            let a=sql_query("UPDATE hagency_agent_v1.agents SET state=$1,generation=generation+1 WHERE id=$2 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id").bind::<Text,_>(target).bind::<Text,_>(id).get_result(db).await?;
 
             sql_query("UPDATE hagency_agent_v1.bindings SET generation=generation+1 WHERE agent_id=$1 AND state IN ('joining','active','suspended')").bind::<Text,_>(id).execute(db).await?;
 
@@ -1380,7 +1399,7 @@ impl DomainStore {
                 return Err(Error::Conflict("binding_transition_denied"));
             }
 
-            let updated=sql_query("UPDATE hagency_agent_v1.bindings SET state=$1,generation=generation+1 WHERE id=$2 RETURNING id,agent_id,project_id,room_id,state,generation").bind::<Text,_>(target).bind::<Text,_>(id).get_result(db).await?;
+            let updated=sql_query("UPDATE hagency_agent_v1.bindings SET state=$1,generation=generation+1 WHERE id=$2 RETURNING id,agent_id,project_id,room_id,state,generation,scope_kind").bind::<Text,_>(target).bind::<Text,_>(id).get_result(db).await?;
             Self::audit(
                 db,
                 p,
@@ -1427,8 +1446,8 @@ impl DomainStore {
                 return Err(Error::Unauthorized("administrator_pause_active"));
             }
 
-            let (project, _, _) = Self::policies(db, &b.project_id, &b.room_id).await?;
-            membership(p, f, &b.room_id, &project.space_id, now)?;
+            let (space, _, _) = Self::binding_policies(db, &b).await?;
+            membership(p, f, &b.room_id, &space, now)?;
 
             if !f.puppet_in_room || f.puppet_mxid.as_deref() != Some(&a.puppet_mxid) {
                 return Err(Error::Conflict("puppet_join_not_confirmed"));
@@ -1437,7 +1456,7 @@ impl DomainStore {
                 return Err(Error::Conflict("encrypted_room_requires_client_crypto"));
             }
 
-            let result=sql_query("UPDATE hagency_agent_v1.bindings SET state='active',generation=generation+1 WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation").bind::<Text,_>(id).get_result(db).await?;
+            let result=sql_query("UPDATE hagency_agent_v1.bindings SET state='active',generation=generation+1 WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation,scope_kind").bind::<Text,_>(id).get_result(db).await?;
             Self::audit(db, p, "binding.resume", id, now).await?;
             Ok(result)
         }
@@ -1456,10 +1475,11 @@ impl DomainStore {
             Self::authorize(db,p,now).await?;
             let project=Self::project_db(db,project_id).await?;
             let mut revision=project.revision;
-            if let Some(room)=room_id {revision=Self::room_db(db,room,project_id).await?.revision;}
+            let mut creation_policy=project.creation_policy;
+            if let Some(room)=room_id {let room=Self::room_db(db,room,project_id).await?;revision=room.revision;creation_policy=room.creation_policy;}
             let project_paused=sql_query("SELECT EXISTS(SELECT 1 FROM hagency_agent_v1.scope_pauses WHERE kind='project' AND scope_id=$1 AND paused) AS matched").bind::<Text,_>(project_id).get_result::<Flag>(db).await?.matched;
             let room_paused=match room_id {Some(room)=>sql_query("SELECT EXISTS(SELECT 1 FROM hagency_agent_v1.scope_pauses WHERE kind='room' AND scope_id=$1 AND paused) AS matched").bind::<Text,_>(room).get_result::<Flag>(db).await?.matched,None=>false};
-            Ok(serde_json::json!({"projectId":project_id,"roomId":room_id,"projectPaused":project_paused,"roomPaused":room_paused,"servicePaused":project_paused||room_paused,"revision":revision}))
+            Ok(serde_json::json!({"projectId":project_id,"roomId":room_id,"projectPaused":project_paused,"roomPaused":room_paused,"servicePaused":project_paused||room_paused,"revision":revision,"creationPolicy":creation_policy}))
         }).await
     }
     pub async fn suspend_project_bindings(
@@ -1568,7 +1588,7 @@ impl DomainStore {
                 return Ok(a);
             }
 
-            let a=sql_query("UPDATE hagency_agent_v1.agents SET state='retiring',generation=generation+1 WHERE id=$1 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation").bind::<Text,_>(id).get_result(db).await?;
+            let a=sql_query("UPDATE hagency_agent_v1.agents SET state='retiring',generation=generation+1 WHERE id=$1 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id").bind::<Text,_>(id).get_result(db).await?;
 
             sql_query("UPDATE hagency_agent_v1.bindings SET state='revoked',generation=generation+1 WHERE agent_id=$1 AND state NOT IN ('left','revoked')").bind::<Text,_>(id).execute(db).await?;
             Self::audit(db, p, "agent.retire", id, now).await?;
@@ -1611,7 +1631,7 @@ impl DomainStore {
                 return Err(Error::Conflict("binding_not_leaving"));
             }
 
-            let b=sql_query("UPDATE hagency_agent_v1.bindings SET state='left' WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation").bind::<Text,_>(id).get_result(db).await?;
+            let b=sql_query("UPDATE hagency_agent_v1.bindings SET state='left' WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation,scope_kind").bind::<Text,_>(id).get_result(db).await?;
             Self::audit(db, p, "binding.left", id, now).await?;
             Ok(b)
         }
@@ -1646,7 +1666,7 @@ impl DomainStore {
                 return Err(Error::Conflict("agent_cleanup_incomplete"));
             }
 
-            let a=sql_query("UPDATE hagency_agent_v1.agents SET state='retired' WHERE id=$1 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation").bind::<Text,_>(id).get_result(db).await?;
+            let a=sql_query("UPDATE hagency_agent_v1.agents SET state='retired' WHERE id=$1 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id").bind::<Text,_>(id).get_result(db).await?;
             Self::audit(db, p, "agent.retired", id, now).await?;
             Ok(a)
         }
@@ -1675,3 +1695,6 @@ use diesel::OptionalExtension;
 #[cfg(test)]
 #[path = "domain_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::CreateBoundAgent;

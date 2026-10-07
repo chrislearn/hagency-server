@@ -32,8 +32,8 @@ pub fn ProjectControls(project_id: Signal<String>, room: Signal<String>) -> Elem
     };
     rsx! {
         div { class: "hg-card hg-stack",
-            h2 { "Room creation rights" }
-            p { "Uses the Project ID and Room ID above. Room restrictions also apply to new agents and bindings; changing creation rights does not stop existing agents." }
+            h2 { "Room access rights" }
+            p { "Uses the Project ID and Room ID above. Room restrictions apply to new bindings; changing access rights does not stop existing bindings." }
             Notice { message }
             form { class: "hg-stack", onsubmit: move |e| {
                 e.prevent_default();
@@ -50,7 +50,7 @@ pub fn ProjectControls(project_id: Signal<String>, room: Signal<String>) -> Elem
                     match browser_auth::call(&path,"PUT",Some(json!({"expectedRevision":expected_revision,"policy":policy}))).await {
                         Ok(result) => {
                             if let Some(next) = result["room"]["revision"].as_i64() { revision.set(next.to_string()); }
-                            message.set("Room creation rights saved. Existing agents keep their runtime state.".into());
+                            message.set("Room access rights saved. Existing agents keep their runtime state.".into());
                         }, Err(e) => message.set(e.message),
                     }
                     busy.set(false);
@@ -59,12 +59,12 @@ pub fn ProjectControls(project_id: Signal<String>, room: Signal<String>) -> Elem
                 label { "Room policy" select { class: "hg-input", value: mode(), onchange: move |e| mode.set(e.value()),
                     option { value: "inherit_project", "Inherit Project with Room deny list" }
                     option { value: "allow_list", "Only listed Room members" }
-                    option { value: "disabled", "Disable creation in this Room" }
+                    option { value: "disabled", "Disable new agent bindings in this Room" }
                 } }
                 label { "Current Room revision" input { class: "hg-input", value: revision(), oninput: move |e| revision.set(e.value()), required: true } }
                 if mode() == "allow_list" { label { "Allowed Matrix users" textarea { class: "hg-input", value: allow(), oninput: move |e| allow.set(e.value()) } } }
                 if mode() != "disabled" { label { "Denied Matrix users" textarea { class: "hg-input", value: deny(), oninput: move |e| deny.set(e.value()) } } }
-                button { class: "hg-button", r#type: "submit", disabled: busy() || project_id().is_empty() || room().is_empty(), "Save Room creation policy" }
+                button { class: "hg-button", r#type: "submit", disabled: busy() || project_id().is_empty() || room().is_empty(), "Save Room access policy" }
             }
         }
         div { class: "hg-card hg-stack",

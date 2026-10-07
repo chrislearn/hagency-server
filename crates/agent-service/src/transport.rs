@@ -1,7 +1,7 @@
 //! Durable owner delivery and replies. Host-only facts are never accepted from HTTP
 //! DTOs. ACK confirms local inbox persistence; execution start and completion are
 //! separate durable transitions. Unknown executions are never automatically rerun.
-use crate::{Error, Result, hash, key, store::Principal, token};
+use crate::{Error, Result, entity_id, hash, key, store::Principal, secret_token};
 use diesel::{
     OptionalExtension, sql_query,
     sql_types::{BigInt, Bool, Nullable, Text},
@@ -101,6 +101,7 @@ pub struct DeliveryFacts {
     pub puppet_in_room: bool,
     pub puppet_can_send_message: bool,
     pub encrypted: bool,
+    pub owner_direct_valid: bool,
 }
 #[derive(Debug, Serialize, diesel::QueryableByName)]
 #[serde(rename_all = "camelCase")]
@@ -300,6 +301,9 @@ impl TransportStore {
             if !domain.matched {
                 return Err(Error::Conflict("agent_domain_not_initialized"));
             }
+            let compatible = sql_query("SELECT (version=2) AS matched FROM hagency_agent_v1.domain_deployment WHERE singleton")
+                .get_result::<Flag>(db).await?;
+            if !compatible.matched { return Err(Error::Conflict("domain_schema_incompatible")); }
             let initialized = sql_query(
                 "SELECT to_regclass('hagency_agent_v1.execution_leases') IS NOT NULL AS matched",
             )
@@ -352,7 +356,7 @@ impl TransportStore {
         Ok((now, auth.valid_until_ms))
     }
     async fn scope(db: &mut AsyncPgConnection, binding: &str) -> Result<RoutingScope> {
-        sql_query("SELECT b.id AS binding_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.id AS agent_id,b.room_id,p.space_id,b.generation AS binding_generation,(u.active AND a.state='active' AND b.state='active' AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND p.active AND r.active) AS active FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id JOIN hagency_agent_v1.projects p ON p.id=b.project_id JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.id=$1")
+        sql_query("SELECT b.id AS binding_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.id AS agent_id,b.room_id,coalesce(p.space_id,'') AS space_id,b.generation AS binding_generation,(u.active AND a.state='active' AND b.state='active' AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND ((b.scope_kind='project' AND p.active AND r.active) OR (b.scope_kind='owner_direct' AND a.owner_direct_room_id=b.room_id))) AS active FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id LEFT JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.id=$1")
             .bind::<Text,_>(binding).get_result(db).await.map_err(unauthorized)
     }
     /// Trusted gateway lookup, never directly exposed as a user HTTP endpoint.
@@ -375,7 +379,7 @@ impl TransportStore {
         let db = &mut *guard;
         db.transaction::<_,Error,_>(async |db:&mut AsyncPgConnection| {
             Self::lock(db).await?;
-            let rows=sql_query("SELECT b.id AS binding_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.id AS agent_id,b.room_id,p.space_id,b.generation AS binding_generation,(u.active AND a.state='active' AND b.state='active' AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND p.active AND r.active) AS active FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id JOIN hagency_agent_v1.projects p ON p.id=b.project_id JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.room_id=$1")
+            let rows=sql_query("SELECT b.id AS binding_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.id AS agent_id,b.room_id,coalesce(p.space_id,'') AS space_id,b.generation AS binding_generation,(u.active AND a.state='active' AND b.state='active' AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND ((b.scope_kind='project' AND p.active AND r.active) OR (b.scope_kind='owner_direct' AND a.owner_direct_room_id=b.room_id))) AS active FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id LEFT JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.room_id=$1")
                 .bind::<Text,_>(room_id).load::<RoutingScope>(db).await?;
             Ok(rows.into_iter().filter(|scope|scope.active).collect())
         }).await
@@ -397,6 +401,7 @@ impl TransportStore {
         }).await
     }
     async fn agent_active(db: &mut AsyncPgConnection, p: &Principal, agent: &str) -> Result<()> {
+        crate::domain::require_assigned(db, p, agent).await?;
         sql_query("SELECT true AS matched FROM hagency_agent_v1.agents WHERE id=$1 AND owner_user_id=$2 AND state='active'").bind::<Text,_>(agent).bind::<Text,_>(&p.user_id).get_result::<Flag>(db).await.map_err(unauthorized)?;
         Ok(())
     }
@@ -450,6 +455,7 @@ impl TransportStore {
         if reference.epoch <= 0 {
             return Err(Error::Invalid("invalid_lease_epoch"));
         }
+        crate::domain::require_assigned(db, p, &reference.agent_id).await?;
         let (id, generation) = device(p)?;
         sql_query("SELECT agent_id,owner_user_id,device_id,device_generation,epoch,expires_at_ms FROM hagency_agent_v1.execution_leases WHERE agent_id=$1 AND owner_user_id=$2 AND device_id=$3 AND device_generation=$4 AND epoch=$5 AND expires_at_ms>greatest($6,(extract(epoch from clock_timestamp())*1000)::bigint)")
             .bind::<Text,_>(&reference.agent_id).bind::<Text,_>(&p.user_id).bind::<Text,_>(id).bind::<BigInt,_>(generation).bind::<BigInt,_>(reference.epoch).bind::<BigInt,_>(now).get_result(db).await.map_err(unauthorized)
@@ -509,6 +515,7 @@ impl TransportStore {
             }
             observation(&scope, requester, facts, now)?;
             let room = crate::domain::RoomFacts {
+                owner_direct_valid:facts.owner_direct_valid,
                 owner_mxid: facts.owner_mxid.clone(), room_id: facts.room_id.clone(),
                 space_id: facts.space_id.clone(), observed_at_ms: facts.observed_at_ms,
                 room_in_space: facts.room_in_space, owner_in_space: facts.owner_in_space,
@@ -624,11 +631,18 @@ impl TransportStore {
             let puppet_sender=sql_query("SELECT EXISTS(SELECT 1 FROM hagency_agent_v1.agents WHERE puppet_mxid=$1) AS matched").bind::<Text,_>(&event.sender_mxid).get_result::<Flag>(db).await?;
             if puppet_sender.matched || event.sender_mxid.starts_with("@_hagency_") {return Ok(RouteResult::Ignored);}
             let known=match &event.thread_root {Some(root)=>sql_query("SELECT EXISTS(SELECT 1 FROM hagency_agent_v1.agent_threads WHERE binding_id=$1 AND thread_root=$2) AS matched").bind::<Text,_>(binding).bind::<Text,_>(root).get_result::<Flag>(db).await?.matched,None=>false};
-            if !event.mentioned_mxids.contains(&scope.puppet_mxid)&&!known {return Ok(RouteResult::Ignored);}
+            if !scope.space_id.is_empty()&&!event.mentioned_mxids.contains(&scope.puppet_mxid)&&!known {return Ok(RouteResult::Ignored);}
             let count=sql_query("SELECT count(*) AS total FROM hagency_agent_v1.owner_events WHERE owner_user_id=$1 AND state IN ('pending','offered','acknowledged','running','unknown')").bind::<Text,_>(&scope.owner_user_id).get_result::<Count>(db).await?;
             if count.total>=self.limits.max_owner_events {return Err(Error::Unavailable("owner_queue_full"));}
-            let root=event.thread_root.as_deref().unwrap_or(&event.event_id);matrix_id(root,'$')?;
-            let id=format!("evt_{}",token());
+            // A top-level owner DM uses its immutable Room ID as the context key.
+            // Explicit Matrix threads and Project messages retain event roots.
+            // Existing queued/outbox roots are never reinterpreted on replay.
+            let root=match event.thread_root.as_deref() {
+                Some(root)=>{matrix_id(root,'$')?;root},
+                None if scope.space_id.is_empty()=>&event.room_id,
+                None=>&event.event_id,
+            };
+            let id=format!("evt_{}",entity_id()?);
             sql_query("INSERT INTO hagency_agent_v1.owner_events(id,binding_id,agent_id,owner_user_id,event_id,room_id,requester_mxid,thread_root,body,digest,binding_generation,state,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12)")
                 .bind::<Text,_>(&id).bind::<Text,_>(binding).bind::<Text,_>(&scope.agent_id).bind::<Text,_>(&scope.owner_user_id).bind::<Text,_>(&event.event_id).bind::<Text,_>(&event.room_id).bind::<Text,_>(&event.sender_mxid).bind::<Text,_>(root).bind::<Text,_>(&event.body).bind::<Text,_>(digest).bind::<BigInt,_>(scope.binding_generation).bind::<BigInt,_>(received_at_ms).execute(db).await?;
             sql_query("INSERT INTO hagency_agent_v1.agent_threads(binding_id,thread_root) VALUES($1,$2) ON CONFLICT DO NOTHING").bind::<Text,_>(binding).bind::<Text,_>(root).execute(db).await?;
@@ -885,7 +899,7 @@ impl TransportStore {
             let old=Self::reply_for_event(db,&e.id).await?;
             if let Some(old)=old {if old.payload_digest!=digest {return Err(Error::Conflict("reply_payload_changed"));}return Ok(old);}
             if e.state!="running"||e.execution_id.as_deref()!=Some(&request.execution_id) {return Err(Error::Conflict("execution_not_running"));}
-            let id=format!("rep_{}",token());let txn=format!("hagency_{}",hash(&e.id));
+            let id=format!("rep_{}",entity_id()?);let txn=format!("hagency_{}",hash(&e.id));
             sql_query("INSERT INTO hagency_agent_v1.reply_outbox(id,owner_event_id,agent_id,binding_id,owner_user_id,room_id,puppet_mxid,thread_root,body,payload_digest,matrix_txn_id,binding_generation,dispatch_epoch,delivery_epoch,state,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,'pending',$14)")
                 .bind::<Text,_>(&id).bind::<Text,_>(&e.id).bind::<Text,_>(&e.agent_id).bind::<Text,_>(&e.binding_id).bind::<Text,_>(&p.user_id).bind::<Text,_>(&e.room_id).bind::<Text,_>(&scope.puppet_mxid).bind::<Text,_>(&e.thread_root).bind::<Text,_>(&request.body).bind::<Text,_>(&digest).bind::<Text,_>(&txn).bind::<BigInt,_>(e.binding_generation).bind::<BigInt,_>(reference.epoch).bind::<BigInt,_>(now).execute(db).await?;
             sql_query("UPDATE hagency_agent_v1.owner_events SET state='completed',outcome='replied' WHERE id=$1").bind::<Text,_>(&e.id).execute(db).await?;
@@ -937,7 +951,7 @@ impl TransportStore {
                 return Self::reply(db,&old.id).await;
             }
             if event.state!="unknown" {return Err(Error::Conflict("execution_not_reconcilable"));}
-            let id=format!("rep_{}",token());let txn=format!("hagency_{}",hash(&event.id));
+            let id=format!("rep_{}",entity_id()?);let txn=format!("hagency_{}",hash(&event.id));
             sql_query("INSERT INTO hagency_agent_v1.reply_outbox(id,owner_event_id,agent_id,binding_id,owner_user_id,room_id,puppet_mxid,thread_root,body,payload_digest,matrix_txn_id,binding_generation,dispatch_epoch,delivery_epoch,state,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15)")
                 .bind::<Text,_>(&id).bind::<Text,_>(&event.id).bind::<Text,_>(&event.agent_id).bind::<Text,_>(&event.binding_id).bind::<Text,_>(&p.user_id).bind::<Text,_>(&event.room_id).bind::<Text,_>(&scope.puppet_mxid).bind::<Text,_>(&event.thread_root).bind::<Text,_>(&request.body).bind::<Text,_>(&digest).bind::<Text,_>(&txn).bind::<BigInt,_>(event.binding_generation).bind::<BigInt,_>(event.dispatch_epoch.unwrap()).bind::<BigInt,_>(reference.epoch).bind::<BigInt,_>(now).execute(db).await?;
             // Keep the execution unknown. Known text is not evidence resolving tool
@@ -1006,9 +1020,9 @@ impl TransportStore {
         db.transaction::<_,Error,_>(async |db:&mut AsyncPgConnection| {
             Self::lock(db).await?;let now=Self::clock(db,now).await?;
             let ttl_expired=Self::expire_pending(db,self.limits.event_ttl_ms,now).await?;
-            let count=sql_query("UPDATE hagency_agent_v1.owner_events e SET state=CASE WHEN e.state='running' THEN 'unknown' ELSE 'cancelled' END WHERE e.state IN ('pending','offered','acknowledged','running') AND NOT EXISTS(SELECT 1 FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id JOIN hagency_agent_v1.projects p ON p.id=b.project_id JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.id=e.binding_id AND b.generation=e.binding_generation AND b.state='active' AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND a.state='active' AND u.active AND p.active AND r.active)").execute(db).await?;
+            let count=sql_query("UPDATE hagency_agent_v1.owner_events e SET state=CASE WHEN e.state='running' THEN 'unknown' ELSE 'cancelled' END WHERE e.state IN ('pending','offered','acknowledged','running') AND NOT EXISTS(SELECT 1 FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id LEFT JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.id=e.binding_id AND b.generation=e.binding_generation AND b.state='active' AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND a.state='active' AND u.active AND ((b.scope_kind='project' AND p.active AND r.active) OR (b.scope_kind='owner_direct' AND a.owner_direct_room_id=b.room_id)))").execute(db).await?;
             let expired=sql_query("UPDATE hagency_agent_v1.owner_events e SET state=CASE WHEN e.state='running' THEN 'unknown' ELSE 'pending' END WHERE e.state IN ('offered','acknowledged','running') AND NOT EXISTS(SELECT 1 FROM hagency_agent_v1.execution_leases l JOIN hagency_agent_v1.devices d ON d.id=l.device_id JOIN hagency_agent_v1.sessions s ON s.id=d.session_id WHERE l.agent_id=e.agent_id AND l.epoch=e.dispatch_epoch AND l.device_id=e.dispatch_device_id AND l.device_generation=d.generation AND d.user_id=e.owner_user_id AND s.user_id=e.owner_user_id AND NOT d.revoked AND NOT s.revoked AND s.valid_until_ms>$1 AND l.expires_at_ms>$1)").bind::<BigInt,_>(now).execute(db).await?;
-            sql_query("UPDATE hagency_agent_v1.reply_outbox o SET state='cancelled' WHERE o.state='pending' AND (NOT EXISTS(SELECT 1 FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id JOIN hagency_agent_v1.projects p ON p.id=b.project_id JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.id=o.binding_id AND b.generation=o.binding_generation AND b.state='active' AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND a.state='active' AND u.active AND p.active AND r.active) OR NOT EXISTS(SELECT 1 FROM hagency_agent_v1.execution_leases l JOIN hagency_agent_v1.devices d ON d.id=l.device_id JOIN hagency_agent_v1.sessions s ON s.id=d.session_id WHERE l.agent_id=o.agent_id AND l.epoch=o.delivery_epoch AND l.device_generation=d.generation AND d.user_id=o.owner_user_id AND s.user_id=o.owner_user_id AND NOT d.revoked AND NOT s.revoked AND s.valid_until_ms>$1 AND l.expires_at_ms>$1))").bind::<BigInt,_>(now).execute(db).await?;
+            sql_query("UPDATE hagency_agent_v1.reply_outbox o SET state='cancelled' WHERE o.state='pending' AND (NOT EXISTS(SELECT 1 FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id LEFT JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id WHERE b.id=o.binding_id AND b.generation=o.binding_generation AND b.state='active' AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND a.state='active' AND u.active AND ((b.scope_kind='project' AND p.active AND r.active) OR (b.scope_kind='owner_direct' AND a.owner_direct_room_id=b.room_id))) OR NOT EXISTS(SELECT 1 FROM hagency_agent_v1.execution_leases l JOIN hagency_agent_v1.devices d ON d.id=l.device_id JOIN hagency_agent_v1.sessions s ON s.id=d.session_id WHERE l.agent_id=o.agent_id AND l.epoch=o.delivery_epoch AND l.device_generation=d.generation AND d.user_id=o.owner_user_id AND s.user_id=o.owner_user_id AND NOT d.revoked AND NOT s.revoked AND s.valid_until_ms>$1 AND l.expires_at_ms>$1))").bind::<BigInt,_>(now).execute(db).await?;
             Ok(count+expired+ttl_expired)
         }).await
     }
@@ -1029,7 +1043,7 @@ impl TransportStore {
             return Err(Error::Invalid("invalid_batch_limit"));
         }
         let mut db = self.db.lock().await;
-        Ok(sql_query("SELECT id,owner_event_id,agent_id,binding_id,owner_user_id,room_id,puppet_mxid,thread_root,body,payload_digest,matrix_txn_id,binding_generation,dispatch_epoch,delivery_epoch,state,delivery_blocked,worker_token,worker_until_ms,matrix_event_id,(SELECT requester_mxid FROM hagency_agent_v1.owner_events WHERE id=owner_event_id) AS requester_mxid FROM hagency_agent_v1.reply_outbox o WHERE state IN ('pending','unknown','sending') AND NOT delivery_blocked AND EXISTS(SELECT 1 FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id JOIN hagency_agent_v1.projects p ON p.id=b.project_id JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id JOIN hagency_agent_v1.execution_leases l ON l.agent_id=a.id JOIN hagency_agent_v1.devices d ON d.id=l.device_id JOIN hagency_agent_v1.sessions s ON s.id=d.session_id WHERE b.id=o.binding_id AND b.generation=o.binding_generation AND b.state='active' AND a.state='active' AND u.active AND p.active AND r.active AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND l.epoch=o.delivery_epoch AND l.device_generation=d.generation AND NOT d.revoked AND NOT s.revoked AND d.user_id=o.owner_user_id AND s.user_id=o.owner_user_id AND l.expires_at_ms>greatest($1,(extract(epoch from clock_timestamp())*1000)::bigint) AND s.valid_until_ms>greatest($1,(extract(epoch from clock_timestamp())*1000)::bigint)) AND worker_until_ms<=greatest($1,(extract(epoch from clock_timestamp())*1000)::bigint) ORDER BY (id<=$3),id LIMIT $2")
+        Ok(sql_query("SELECT id,owner_event_id,agent_id,binding_id,owner_user_id,room_id,puppet_mxid,thread_root,body,payload_digest,matrix_txn_id,binding_generation,dispatch_epoch,delivery_epoch,state,delivery_blocked,worker_token,worker_until_ms,matrix_event_id,(SELECT requester_mxid FROM hagency_agent_v1.owner_events WHERE id=owner_event_id) AS requester_mxid FROM hagency_agent_v1.reply_outbox o WHERE state IN ('pending','unknown','sending') AND NOT delivery_blocked AND EXISTS(SELECT 1 FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id LEFT JOIN hagency_agent_v1.rooms r ON r.room_id=b.room_id AND r.project_id=b.project_id JOIN hagency_agent_v1.execution_leases l ON l.agent_id=a.id JOIN hagency_agent_v1.devices d ON d.id=l.device_id JOIN hagency_agent_v1.sessions s ON s.id=d.session_id WHERE b.id=o.binding_id AND b.generation=o.binding_generation AND b.state='active' AND a.state='active' AND u.active AND ((b.scope_kind='project' AND p.active AND r.active) OR (b.scope_kind='owner_direct' AND a.owner_direct_room_id=b.room_id)) AND NOT b.admin_project_paused AND NOT b.admin_room_paused AND l.epoch=o.delivery_epoch AND l.device_generation=d.generation AND NOT d.revoked AND NOT s.revoked AND d.user_id=o.owner_user_id AND s.user_id=o.owner_user_id AND l.expires_at_ms>greatest($1,(extract(epoch from clock_timestamp())*1000)::bigint) AND s.valid_until_ms>greatest($1,(extract(epoch from clock_timestamp())*1000)::bigint)) AND worker_until_ms<=greatest($1,(extract(epoch from clock_timestamp())*1000)::bigint) ORDER BY (id<=$3),id LIMIT $2")
             .bind::<BigInt,_>(now).bind::<BigInt,_>(limit as i64).bind::<Text,_>(cursor).load(&mut *db).await?)
     }
     /// Trusted routing worker scan over the existing durable AS inbox. No body
@@ -1078,7 +1092,7 @@ impl TransportStore {
             let deadline=sql_query("SELECT (l.expires_at_ms>greatest($2,(extract(epoch from clock_timestamp())*1000)::bigint) AND s.valid_until_ms>greatest($2,(extract(epoch from clock_timestamp())*1000)::bigint)) AS matched FROM hagency_agent_v1.execution_leases l JOIN hagency_agent_v1.devices d ON d.id=l.device_id JOIN hagency_agent_v1.sessions s ON s.id=d.session_id WHERE l.agent_id=$1").bind::<Text,_>(&intent.agent_id).bind::<BigInt,_>(now).get_result::<Flag>(db).await?;
             if !deadline.matched {return Err(Error::Unauthorized("reply_lease_expired"));}
             facts(&scope,&requester.id,f,Self::clock(db,now).await?)?;
-            let worker=token();
+            let worker=secret_token();
             sql_query("UPDATE hagency_agent_v1.reply_outbox SET state='sending',worker_token=$1,worker_until_ms=$2 WHERE id=$3").bind::<Text,_>(worker).bind::<BigInt,_>(now+self.limits.worker_lease_ms).bind::<Text,_>(id).execute(db).await?;Self::reply(db,id).await
         }).await
     }
@@ -1205,9 +1219,12 @@ fn facts(scope: &RoutingScope, requester: &str, f: &DeliveryFacts, now: i64) -> 
         || scope.room_id != f.room_id
         || scope.space_id != f.space_id
         || requester != f.requester_mxid
-        || !f.owner_in_space
         || !f.owner_in_room
-        || !f.room_in_space
+        || (if scope.space_id.is_empty() {
+            !f.owner_direct_valid || requester != scope.owner_mxid
+        } else {
+            !f.owner_in_space || !f.room_in_space
+        })
         || !f.requester_in_room
         || !f.puppet_in_room
         || !f.puppet_can_send_message
