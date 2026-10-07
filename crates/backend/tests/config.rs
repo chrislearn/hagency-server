@@ -155,28 +155,45 @@ fn component_paths_belong_to_each_file_and_are_listed_for_watchers() {
 }
 
 #[test]
-fn notification_credentials_belong_to_hagency_config_and_require_a_local_account() {
+fn obsolete_hagency_domain_configuration_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let path = fixture(dir.path());
-    let token = path.parent().unwrap().join("notification-token");
-    std::fs::write(&token, "fixture-secret").unwrap();
-    let server = Config::load(&path).unwrap().matrix.server_name.to_string();
-    let enabled = format!(
-        "{HOST}\n[action_notifications]\nbot_mxid = \"@notifications:{server}\"\ntoken_file = \"notification-token\"\n"
-    );
-    std::fs::write(&path, &enabled).unwrap();
-    let conf = Config::load(&path).unwrap();
-    assert_eq!(
-        conf.action_notifications.as_ref().unwrap().token_file,
-        token.canonicalize().unwrap()
-    );
+    for obsolete in [
+        "account_config = \"approval.json\"",
+        "retirement_admin_token_file = \"token\"",
+        "callback_origins = [\"http://127.0.0.1:3010\"]",
+        "[fleet_access]\nallow_self_service = true",
+        "[hafleet_access]\nallow_self_service = true",
+        "[action_notifications]\nbot_mxid = \"@bot:localhost\"\ntoken_file = \"token\"",
+    ] {
+        std::fs::write(&path, format!("{HOST}\n{obsolete}\n")).unwrap();
+        assert!(
+            Config::load(&path).is_err(),
+            "accepted obsolete configuration"
+        );
+    }
+}
+
+#[test]
+fn offline_request_ttl_is_bounded_and_configurable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fixture(dir.path());
+    assert_eq!(Config::load(&path).unwrap().queue.event_ttl_ms, 86_400_000);
+    for value in [0_i64, 999, 2_592_000_001] {
+        std::fs::write(
+            &path,
+            HOST.replace(
+                "event_ttl_ms = 86400000",
+                &format!("event_ttl_ms = {value}"),
+            ),
+        )
+        .unwrap();
+        assert!(Config::load(&path).is_err());
+    }
     std::fs::write(
         &path,
-        enabled.replace(
-            &format!("@notifications:{server}"),
-            "@notifications:other.invalid",
-        ),
+        HOST.replace("event_ttl_ms = 86400000", "event_ttl_ms = 60000"),
     )
     .unwrap();
-    assert!(Config::load(&path).is_err());
+    assert_eq!(Config::load(&path).unwrap().queue.event_ttl_ms, 60_000);
 }

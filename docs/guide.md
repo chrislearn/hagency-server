@@ -11,17 +11,18 @@ The Cargo workspace follows Pasion's backend/frontend organization:
 ```text
 crates/
 ├─ backend/   # hagency-server: embedded Palpo, Pasion and Hagency APIs
+├─ agent-service/ # permanent Agent domain and transport
 └─ frontend/  # hagency-frontend: Dioxus/WASM, based on copied Padmin source
 xtask/       # development/configuration tools (workspace member)
 resources/   # generated frontend and Pasion assets, ignored by Git
 ```
 
-The frontend combines Padmin's Matrix administration screens with the previous
-web-admin workflows: projects, agent resource selection and requests, provider
-authorization and pairing, agent identities, account approvals and audit history.
+The frontend combines Padmin's generic Matrix/Pasion administration with
+permanent Agent ownership, Project/Room bindings and creation policy.
 It is served at `/` by the Rust backend. Matrix endpoints remain at `/_matrix`,
 Palpo administration at `/_palpo`, discovery at `/.well-known/matrix`, and
-Hagency APIs at `/api`. Pasion remains mounted at `/_pasion/`.
+native Hagency APIs at `/api/hagency/v1` and browser management at
+`/api/browser/hagency/v1`. Pasion remains mounted at `/_pasion/`.
 `/healthz` reports process HTTP availability.
 
 ## Contents
@@ -44,8 +45,8 @@ All shell commands below run from the repository root.
 ```text
 hagency-server (one process, one port)
 ├─ MatrixServer: Palpo initialization, Matrix/admin/discovery routes and workers
-├─ Rust web-admin: sessions, Fleet/Agent, project requests, account approvals
-├─ outbound relay: durable transactions, leases, ACKs and published snapshots
+├─ BrowserAuth/BFF: personal sessions and Project/Agent management
+├─ required Agent Appservice: durable inbox, fenced leases and reply outbox
 ├─ PasionServer: OAuth/OIDC, account UI/API and workers at /_pasion/
 └─ integrated Padmin + Hagency Dioxus/WASM assets
            │
@@ -134,8 +135,8 @@ Pasion owns passwords, registration, account status and administrator roles.
 Its provisioning worker synchronizes the corresponding Matrix identities and
 administrator flags to Palpo. Manage people at `/pasion/accounts`; `/users`
 shows their Matrix records and service identities. Password changes and human
-account creation use Pasion. Hagency stores business permissions and project,
-provider and request state, without another password/account database.
+account creation use Pasion. Hagency stores permanent Agent owners, Project/Room creation rights and durable
+transport, without another password/account database.
 
 The host provisions the reserved public OAuth client and derives its
 `/oauth/callback` URL; no client secret or separate frontend deployment is needed.
@@ -146,31 +147,29 @@ boundary; a member-only token is insufficient even for an administrator account.
 Introspection caching is disabled so role/token revocation affects the next
 request. Pasion's own admin endpoints enforce their scope and current role.
 
-Explicit compatibility mode remains available with
-`[hagency].delegate_matrix_auth = false` in Pasion's config. Only that mode uses
-Palpo native password login and the original web-admin Matrix account-approval
-workflow. It is not the default unified deployment.
+Pasion delegated authentication is required by this integrated deployment. There
+is no Hagency native-password or account-approval compatibility mode.
 
 Frontend source provenance and upstream licensing are recorded in `NOTICE`
 (Padmin commit `83d4567470ada808b89914aa0c786cdc3a7ac89a`).
 
 ## Native client login and self-service enrollment
 
-`hagency-client` signs in with Pasion, creates its own Fleet, saves the returned configuration and starts outbound transport automatically. First binding requires local operator access; later logins are pinned to the same server and account.
+`chrislearn/hagency-client` uses the user's own Matrix account through Pasion PKCE.
+Native `/api/hagency/v1` verifies Pasion proof and Matrix whoami, issues short user
+sessions, and registers local device credentials. Cookie/Origin requests are
+rejected on native APIs. Device rotation/revocation and real-time session expiry
+are rechecked during sensitive transactions.
 
-Enable enrollment in Hagency's own configuration (disabled by default):
+The integrated Appservice is required and server managed. No per-user Fleet or
+Appservice enrollment is needed. Agents have permanent owners and independent
+Project/Room bindings. Space managers set default creation permission with
+allow/deny lists; deny wins and disabling creation does not pause existing Agents.
+The local client controls Codex, resource budgets and tool risk decisions.
 
-```toml
-[fleet_access]
-allow_self_service = true
-max_per_user = 3
-```
-
-The administrator enables the policy once; ordinary users need no per-install approval. A stable installation ID makes creation idempotent. Each Fleet has its own App Service. Registration authority and the Pasion shared secret stay server-side. Disabling enrollment prevents new enrollments and does not revoke existing connections.
-
-Native API under `/_hagency/client/v1/`: public discovery; identity verifies the user's Pasion bearer; fleets creates and returns that user's configuration; fleets/{id}/connect verifies connectivity. Authenticated native requests reject browser cookies and Origin. Creation accepts only installationId/name and derives ownership from verified identity; it never grants Matrix administrator rights.
-
-Human local sessions last at most 15 minutes, revalidate tokens at most every 30 seconds, and require login after restart. Machine credentials are independent of browser login: human token revocation ends local login access, while Fleet retirement is a separate server management action.
+The browser uses the closed `/api/browser/hagency/v1` BFF and pages
+`/hagency/projects` and `/hagency/agents`; it never receives a native device or
+session credential. See [Agent architecture](OPERATIONS.md) for the full boundary.
 
 ## Configuration and initial administrator
 
@@ -209,7 +208,7 @@ additional `[hagency]` section contains `resources_dir` and
 
 | File and setting | Database | Contents |
 | --- | --- | --- |
-| `hagency.toml`: `database_url` | `hagency` | web-admin/Fleet/project state and outbound queue |
+| `hagency.toml`: `database_url` | `hagency` | new Agent identities, domain, AS inbox and reply outbox |
 | `palpo.toml`: `db.url` | `palpo` | Matrix users, rooms, events and homeserver state |
 | `pasion.toml`: `database.uri` | `pasion` | Accounts, OAuth/OIDC tokens and sessions |
 
@@ -260,15 +259,8 @@ be reused if it satisfies Pasion policy. Stop the development watcher before
 bootstrap; there must be one server process per database. Subsequent starts
 omit all bootstrap options.
 
-Optional `account_config` accepts the original web-admin JSON fields:
-`botMxid`, `botToken`, `adminToken`, `approvers`, `passwordKey`, `registrationToken`.
-The worker validates a private invite-only administrator room, checks the exact
-approval event and the approver's current authority, and creates an ordinary
-Matrix account. Pending passwords use AES-256-GCM; public APIs, audit records
-and approval cards contain no password or access token. Palpo registration must
-be enabled with the corresponding registration token for this optional flow.
-`retirement_admin_token_file` can separately supply the server-only credential
-used for Hagency final-allocation retirement.
+Legacy Fleet/account-approval/retirement-token/notification configuration is
+rejected. Human registration and account administration belong to Pasion.
 
 ## Compose deployment
 
@@ -291,8 +283,8 @@ peak memory; its crypto/HTTP/database dependencies retain full optimization.
 Put the loopback-exposed
 HTTP listener behind your HTTPS proxy. Preserve the public Host header and
 forward `/`, `/api`, `/_matrix`, `/_palpo`, `/_pasion/`, `/.well-known/matrix` and `/healthz`
-to port 8088. Browser/admin/outbound clients use the configured public origin;
-Palpo's App Service relay uses the derived internal origin. No separate
+to port 8088. Browser/admin/native clients use the configured public origin;
+The integrated Agent Appservice uses the derived internal origin. No separate
 web-admin origin, port or relay URL needs configuration.
 
 Compose mounts `config/docker/` at `/app/config/`. The entrypoint copies this
@@ -318,98 +310,42 @@ a shared default administrator password to the image or config.
 
 ## Behavior retained in the Rust port
 
-- Matrix password login; opaque HttpOnly/SameSite cookies, CSRF, Origin/Host
-  checks, bounded bodies, rate limits, live identity/admin checks and deadlines.
-- Fleet authorization, verified installation, collision/drift checks,
-  owner-only credential delivery, pause/resume/final revoke and audit.
-- Managed Agent identity creation, immutable profile update, observed membership
-  and verified retirement, including Hagency final-allocation retirement.
-- Exact Matrix probe receipts, generation-bound outbound connection proofs,
-  project/private approval rooms, permission checks, source-bound requests and
-  actual admission/status observations.
-- Durable outbound transactions, ordered lanes, leases, ACK tombstones,
-  bounded capacity, credential rotation, migration and replay, immutable update
-  sequences, current snapshots and stale/unknown readiness rejection.
-- Optional account approval worker with private receipt, encrypted pending
-  password, authenticated verdict, registration recovery and result notices.
+Palpo/Pasion generic users, Rooms/Spaces, media, reports, appservices, federation,
+server actions/notices/notifications and identity administration continue through
+their existing APIs and authority checks. New Hagency behavior is documented in
+[Agent architecture](OPERATIONS.md) and [the capability list](WEB_ADMIN_PARITY.md).
 
-The PostgreSQL document and delivery queue commit atomically. A session-level
-advisory lock fences the process for the lifetime of its dedicated connection.
-A database outage fails writes; restart the process to recover that connection.
-The current document store follows the original single-server/single-writer
-model, with bounded queue capacity. It is not a clustered scheduling system.
-
-This phase integrates Palpo, Pasion, Padmin and Hagency web administration.
-The project-first Rinx client is subsequent work. Existing SQLite admin databases
-are not automatically imported: use a fresh database for this version until a
-separately validated migration is provided.
+Fleet/Hafleet, Engagement, resource allocation approvals, account-approval rooms,
+old enrollment, Miniapp aliases and authority import are removed. No old mode or
+data conversion remains. New domain/queue transactions use `hagency_agent_v1`.
+Encrypted Room execution is deferred until client crypto is available; ciphertext
+persistence alone does not execute an Agent. Offline local tools cannot be forcibly
+undone after server lease revocation.
 
 ## Validation
 
-Install Node.js to run the `tests/*.mjs` scripts below. It is not required for
-frontend builds, local server development or deployment.
-
 ```sh
 just check-tools
-cargo fmt --check
+just check-agents
+just check-agents-postgres
 cargo check --all-targets --locked
-cargo test --locked
-cargo build --example admin_contract_server --locked
-cargo test --locked -p hagency-frontend --target <native-host-triple>
-node tests/http-contract.mjs
-node tests/native-client-contract.mjs
-# Real client/server enrollment with controlled Pasion/Matrix peers:
-CONTRACT_SERVER=/absolute/path/to/admin_contract_server \
-HAGENCY_CLIENT=/absolute/path/to/hagency \
-CONSOLE_ASSETS=/absolute/path/to/client-console-assets \
-node tests/client-enrollment.e2e.mjs
-# If target artifacts are elsewhere:
-CONTRACT_SERVER=/absolute/path/to/admin_contract_server node tests/http-contract.mjs
+cargo test --locked -p hagency-server
+cargo clippy --locked -p hagency-server --all-targets -- -D warnings
+cargo check --locked -p hagency-frontend --target wasm32-unknown-unknown
 ```
 
-Replace `<native-host-triple>` with `rustc -vV`'s `host` value, for example
-`aarch64-apple-darwin`. Build frontend assets before running the HTTP harness.
+The new PostgreSQL runner creates/removes a random isolated test database. Do not
+point integration checks at an existing business database. Real integrated Pasion
+PKCE/Matrix/new Agent transport checks use `scripts/test-agent-integration.py`;
+consult its argument parser for executable settings. Generic Pasion/Compose checks
+remain `tests/pasion-integration.mjs` and `tests/docker-smoke.mjs` and require their
+dedicated test resources/databases. Removed Fleet contract scripts and their old
+fixture server are not valid commands for this release.
 
-The HTTP contract harness starts the Rust adapter and a controlled Matrix
-fixture. It covers the Dioxus SPA/assets and token bridge, authentication and isolation,
-Fleet/Agent lifecycle, project admission, outbound proof/ACK/rotation, exact
-request bindings, final allocation retirement and approved account provisioning.
-It does not connect to a model. PostgreSQL persistence/lock tests use an
-explicit dedicated `HAGENCY_TEST_DATABASE_URL`:
-
-```sh
-HAGENCY_TEST_DATABASE_URL=postgres://... cargo test --lib postgres_restart -- --ignored
-```
-
-`tests/integration.mjs` verifies the real integrated binary against dedicated
-Hagency and Palpo PostgreSQL databases, including administrator login, Matrix
-discovery, Fleet registration, real relay delivery, restart recovery and persistent signing keys.
-The integration script refuses either database if it contains application tables.
-To run it, install `psql`, create two empty dedicated databases, then:
-
-```sh
-HAGENCY_TEST_DATABASE_URL=postgres://.../hagency \
-PALPO_TEST_DATABASE_URL=postgres://.../palpo node tests/integration.mjs
-# Build an image and verify an isolated deployment, including restart:
-docker build -t hagency-server:integration-check .
-node tests/docker-smoke.mjs
-```
-
-For the unified Pasion account/PKCE integration, prepare three **empty** dedicated
-databases and the Pasion assets, then run:
-
-```sh
-HAGENCY_TEST_DATABASE_URL=postgres://.../hagency_test \
-PALPO_TEST_DATABASE_URL=postgres://.../palpo_test \
-PASION_TEST_DATABASE_URL=postgres://.../pasion_test node tests/pasion-integration.mjs
-```
-
-Set `HAGENCY_BINARY` if the server binary is outside `target/debug/`, and
-`PASION_TEST_RESOURCES` if Pasion assets are outside `resources/pasion/`. These
-scripts populate their dedicated databases; use new empty databases for a rerun.
-
-The Docker smoke test creates a unique Compose project and removes its own
-containers/volumes afterward. See [the validation record](VALIDATION.md) for executed checks and limits.
+BrowserAuth tests check live identity/admin role, cookie/CSRF/origin, logout,
+closed BFF capabilities and unmounted old paths. Complete-host smoke must also
+verify old endpoints return 404/410 and generic Palpo/Pasion APIs still work.
+Historical evidence and limitations are recorded in [validation](VALIDATION.md).
 
 Palpo embedding change: [upstream PR #505](https://github.com/palpo-im/palpo/pull/505).
 
@@ -487,11 +423,9 @@ Pasion delegation is enabled by default in generated configurations. The host
 wires Palpo discovery, token introspection and compatible Matrix password login
 to the mounted Pasion service. `/_pasion/` provides the account center;
 `/_pasion/register` is registration, and `/login` is the integrated console entry.
-The old `/account-request` URL redirects to Pasion registration in this mode,
-and the old Hagency account-approval menu is hidden. Human account approvals
-must be expressed through Pasion registration/access policy rather than creating
-a second password authority. The legacy approval worker is preserved for
-explicit native-auth installations and remains incompatible with delegation.
+Registration uses Pasion's own access/registration policy. The old
+`/account-request`, custom account-approval worker and menu are removed;
+there is no native-auth compatibility mode.
 
 Pasion does not implement legacy Matrix SSO redirects. OAuth clients use the
 mounted issuer; legacy Matrix password clients use the delegated password flow.
@@ -505,43 +439,14 @@ AGPL licenses; changing the manifests does not relicense that code.
 
 ### Upgrading the former combined database
 
-This change does not automatically rename databases, move existing data or
-rewrite private configuration files. For a former deployment with Matrix and
-admin tables together in `hagency`, stop all server processes and back up that
-database and the persisted key/media directory first. The following commands
-assume the original Compose setup, no existing `palpo` database, and an existing
-`public.hagency_admin_state` table. Run them only after stopping any native
-server connected to those databases as well.
+This version does not migrate old Hagency document/Fleet/Engagement data.
+Preserve Palpo/Pasion database URLs, Matrix server identity and signing/media
+files. Configure a separate Hagency database for the new `hagency_agent_v1`
+schema. No startup command renames, deletes or copies existing business tables.
 
-```sh
-docker compose stop server
-umask 077
-mkdir -p backups/db-split
-docker compose exec -T postgres pg_dump -U hagency -Fc hagency > backups/db-split/hagency-before-split.dump
-docker compose exec -T postgres pg_dump -U hagency --no-owner --no-privileges -t public.hagency_admin_state hagency > backups/db-split/admin.sql
-# Stop here if either backup fails.
-docker compose exec -T postgres psql -U hagency -d postgres -v ON_ERROR_STOP=1 \
-  -c 'ALTER DATABASE hagency RENAME TO palpo;' \
-  -c 'CREATE DATABASE hagency OWNER hagency;'
-docker compose exec -T postgres psql -U hagency -d hagency --single-transaction -v ON_ERROR_STOP=1 < backups/db-split/admin.sql
-```
-
-Set `hagency.toml` → `database_url` to `/hagency`, `palpo.toml` → `[db].url`
-to `/palpo`, and `pasion.toml` → `[database].uri` to `/pasion`. Keep the same Matrix server
-name and key/media directory. If Pasion was never enabled, create its database
-once before enabling it. The configuration generator intentionally refuses to
-overwrite existing files.
-
-After confirming the admin restore succeeded, remove its original table from
-`palpo` so it contains only Matrix data:
-
-```sh
-docker compose exec -T postgres psql -U hagency -d palpo -v ON_ERROR_STOP=1 -c 'DROP TABLE public.hagency_admin_state;'
-```
-
-The server can then be restarted with the updated configuration and image.
-Existing Matrix accounts and Fleet/queue state are retained by the rename and
-admin-table copy; existing Pasion data stays in its database.
+An older combined database requires a separately reviewed backup and component
+separation procedure before enabling this host; copying `hagency_admin_state`
+into the new service is not a supported migration.
 
 ### Moving the previous single configuration into component files
 
@@ -549,7 +454,7 @@ For an existing three-database configuration, keep the database URLs, server
 identity, key/media paths and authentication settings unchanged while splitting:
 
 1. Put host settings into `hagency.toml`; replace its inline component sections
-   with `palpo_config` and optional `pasion_config` file references.
+   with `palpo_config` and required `pasion_config` file references.
 2. Move `[matrix]` into `palpo.toml` at the top level; remove the `matrix.` prefix
    from its subsection names, such as `[matrix.db]` → `[db]`.
 3. Move `[pasion].database_url` to `[database].uri` in `pasion.toml`. Move
@@ -560,4 +465,4 @@ identity, key/media paths and authentication settings unchanged while splitting:
 
 The previous private `config.dev.toml`/`config.docker.toml` files are not rewritten
 or imported automatically. Preserve them during the move. If their databases
-are still combined, complete the database split above before using the new files.
+are still combined, review component separation independently before using the new files.

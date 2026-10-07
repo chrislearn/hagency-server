@@ -4,20 +4,11 @@ public_origin = "http://127.0.0.1:8088"
 database_url = "postgres://hagency:hagency_dev@127.0.0.1:55438/hagency"
 data_dir = "../../data"
 palpo_config = "palpo.toml"
-# Omit this reference to disable Pasion embedding.
+# Pasion login is required by the integrated Agent service.
 pasion_config = "pasion.toml"
 # Compiled Dioxus assets; the host reads them on each request.
 public_dir = "../../resources/frontend/public"
-# callback_origins = ["http://127.0.0.1:3010"]
-# account_config = "../../secrets/account-approval.json"
-# retirement_admin_token_file = "../../secrets/agent-admin-token"
 
-# Optional private Inbox notifications from an ordinary Pasion/Matrix account.
-# [action_notifications]
-# bot_mxid = "@notifications:palpo.instance"
-# token_file = "../../secrets/notifications-token"
-
-# Allow ordinary Pasion users to create their own outbound Fleets.
-[fleet_access]
-allow_self_service = false
-max_per_user = 3
+[queue]
+# Do not start stale offline requests; trusted server receipt time, 24h default.
+event_ttl_ms = 86400000

@@ -63,11 +63,11 @@ check-tools:
     cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
     cargo test --locked --manifest-path xtask/Cargo.toml
 
-# Validate the shared business protocol and native Operations HTTP workflows.
-check-operations:
-    cargo test --locked -p hagency-contract -p hagency-operations
-    cargo clippy --locked -p hagency-contract -p hagency-operations --all-targets -- -D warnings
+# Validate the new Agent domain and durable transport.
+check-agents:
+    cargo test --locked -p hagency-agent-service
+    cargo clippy --locked -p hagency-agent-service --all-targets -- -D warnings
 
-# Import a reviewed authority projection while the server is stopped.
-import-authority file config="config/dev/hagency.toml":
-    cargo run --locked -p hagency-server -- --config "$2" --import-authority "$1"
+# Run PostgreSQL tests in a temporary isolated database.
+check-agents-postgres:
+    python3 scripts/test-agent-service-postgres.py

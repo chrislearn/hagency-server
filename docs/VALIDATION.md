@@ -2,6 +2,32 @@
 
 [中文](VALIDATION.zh-CN.md) · [Documentation](README.md)
 
+The old Fleet/Engagement/allocation results below describe removed implementations.
+They do not establish compatibility in the current Agent release. Current behavior
+is documented in [Agent architecture](OPERATIONS.md) and the configuration guide.
+
+2026-10-07 cutover checks executed for the new browser/domain boundary:
+
+- `cargo test -p hagency-server --offline --lib browser_auth::tests`: two tests passed.
+  Controlled HTTP checks cover live identity/admin-role revocation, cookie/CSRF/origin,
+  logout, closed BFF capabilities and old routes unmounted from BrowserAuth.
+- `cargo clippy -p hagency-server --offline --all-targets -- -D warnings`: passed
+  after removing the obsolete Fleet contract-server example.
+- `cargo check -p hagency-frontend --target wasm32-unknown-unknown --offline`: passed;
+  51 existing generic frontend dead-code warnings remain.
+
+These checks do not prove browser visual acceptance or complete-host PKCE/Matrix
+transport. Record the separately executed integrated smoke results before claiming
+those paths were verified. The PostgreSQL runner's results are recorded separately.
+
+
+Additional 2026-10-07 integration evidence:
+
+- 39 tests passed in the isolated PostgreSQL runner, including private Room discovery/roster authorization and the production Appservice startup readiness gate. The authenticated create/bind HTTP routes return 503 while readiness is false with unchanged Agent/binding/command/audit rows and zero Matrix/Gateway calls. The real startup worker remains unready after Matrix send, becomes ready only after the authenticated AS event is durably received, and the same routes then return 202. Added checks cover 129 execution witnesses across two pages, owner isolation, permanent history, mandatory HTTP history snapshots and atomic concurrent start/acquire rejection without lease changes. The test uses random isolated databases and removes them after execution. Final strict all-target Clippy also passed; the server stores execution evidence rather than model charges.
+- `HAGENCY_TEST_BACKUP_RESTORE=1 python3 scripts/test-agent-integration.py` passed: real native Pasion PKCE, puppet membership, messages and stable replies, Room discovery, retirement and [same-host three-database recovery](BACKUP_RESTORE_VALIDATION.md).
+- `HAGENCY_TEST_HOLD_CLIENT=1` with the real client OwnerHost test passed: login, Space/Room creation and linking/adoption, Room discovery, Agent creation and actual membership, roster and logout. No model inference; temporary databases cleaned up.
+- OpenAPI 3.1 owner/device and Appservice contracts cover 46/4 actual operations; route/DTO validation and eight negative checks passed, including the execution-history route and required lease-acquisition snapshot.
+
 This is a chronological record of checks performed on earlier implementations.
 For current behavior, read the final unified Pasion section and the
 [configuration guide](guide.md); earlier opt-in authentication and frontend notes
@@ -455,3 +481,124 @@ online association/delegation are not advertised as implemented.
   **Fleet connections**, and the existing Matrix/Padmin navigation.
 - Persisted IDs, registrations, tokens, protocol keys and audit history were
   retained; no database migration is needed.
+
+2026-10-07 new PostgreSQL transport/domain recovery regression:
+
+- `python3 scripts/test-agent-service-postgres.py`: 22 tests passed, none failed or
+  ignored. The runner created and removed its dedicated random database.
+- Includes explicit known-result recovery after lease takeover, immutable original
+  execution identity, retained unknown execution, stable reply transaction/payload,
+  reauthorization of definitely unsent cancellation, ambiguous network preservation,
+  active-worker rejection, permanent delivery denial and binding revocation.
+- Includes trusted committed provisioning after owner logout and terminal scope
+  sweep for late joins. This database test does not itself simulate Matrix network
+  failure or prove a live deployment physically removed a late membership.
+- `cargo clippy -p hagency-agent-service --offline --all-targets -- -D warnings`
+  passed for the new modules.
+
+2026-10-07 real browser login and visual acceptance (isolated live fixture):
+
+- Built executable web assets with `just prepare-frontend`; inspected the actual
+  Rust backend in native Chrome Guest, not a mock or developer token form.
+- Pasion native sign-in with disposable fixture administrator, personal Matrix
+  consent, second administrative consent and OAuth callback reached Dashboard.
+  Generic Users, Rooms and Pasion Local Accounts pages loaded real server lists.
+- Projects and My agents displayed the new permanent-owner/local-Codex boundary.
+  No Fleet, Engagement, allocation approval or native enrollment navigation was
+  present. At the inspected 1200×730 viewport forms remained readable and scrollable.
+- Found and fixed a real reload defect: the frontend previously rejected a valid
+  HttpOnly browser session after its memory-only OAuth bearer was lost. Owner
+  pages now revalidate `/api/session` and use the restricted BFF. Generic Matrix
+  management re-enters real Pasion PKCE authorization when a bearer is needed;
+  access and refresh tokens remain out of browser persistent storage.
+- Repeated with a newly registered ordinary user through Pasion's native account
+  registration and personal Matrix consent. Default landing was Projects; only
+  Projects/My agents navigation was shown. Reload preserved that verified session.
+  Cookie-only logout succeeded; direct navigation to Agents after logout returned
+  to Login. No tokens were pasted, injected or exported from the browser.
+- Frontend wasm check and final release packaging passed (51 existing generic
+  unused-code warnings). HOLD fixture termination runs its normal server and
+  dedicated database cleanup; no production account or business database was used.
+- This browser pass verifies login, read/navigation, reload and logout. Project/
+  Agent creation and policy mutations remain covered by HTTP/PostgreSQL/live
+  protocol tests, not asserted as visually exercised here. Current forms register
+  existing Matrix Space/Room IDs; the frontend does not yet provide joined-room
+  discovery or a Matrix chat UI.
+
+Project administration completion:
+
+- Restricted browser BFF now permits only the fixed Project/Room creation-policy,
+  service-state and pause/clear-pause operations. Matrix Room IDs are decoded as a
+  single safe path segment; encoded slash, nested encoding and arbitrary operation
+  paths remain rejected. Pause commands require an empty body and the existing
+  authenticated-cookie/CSRF check; native gateway rechecks actual Matrix authority.
+- Project UI provides Room inheritance/allow-list/disabled creation policy and
+  administrator Project or Room service pause, including current status/revision.
+  Clearing administrative pause explicitly tells the owner to resume bindings;
+  creation-policy changes do not stop existing agents.
+- These added controls were compiled and covered by fixed BFF capability tests;
+  the real browser pass above predates these specific added controls.
+
+2026-10-07 real authorization regression completion:
+
+- `HAGENCY_TEST_NATIVE_PKCE=1 python3 scripts/test-agent-integration.py` passed
+  against the actual embedded Pasion/Palpo backend using dedicated disposable
+  databases and a real native DCR/PKCE/consent grant.
+- Before any Agent existed, Project service pause rejected creation, allocated no
+  Agent and stored no command. Clearing it restored eligibility. Encoded Matrix
+  Room IDs worked for native Room creation policy and service-state requests;
+  disabled policy rejected creation and restoring inheritance restored eligibility.
+- Room pause rejected creation; combined Project+Room pause reported both flags.
+  Clearing only Room pause left the Project flag and merged servicePaused active,
+  and still rejected a new Agent. Clearing Project pause permitted creation.
+- Owner GET command status returned the same Agent/binding as stable same-key
+  replay. A changed payload returned 409; unauthenticated command discovery was
+  refused. Dedicated PostgreSQL ownership tests separately verify another owner's
+  same-key status request cannot disclose the original result.
+- The original live mention/ACK/start/reply flow and terminal retirement with a
+  real late Matrix rejoin still passed after these additional checks. No model or
+  tool runner was invoked. All fixture databases were removed by the runner.
+- `python3 scripts/test-agent-service-postgres.py`: 23/23 tests passed. New scope
+  regression proves an empty paused scope cannot be bypassed by Agent creation or
+  a new binding of an existing Agent; disabled creation does not stop a running
+  binding, and clearing admin pause does not implicitly resume one.
+
+2026-10-07 routing/reply worker fairness regression:
+
+- Fixed two starvation paths: a single Room state failure previously aborted
+  routing/sending for the pass, and fixed oldest-first limits could repeatedly
+  select the same unsendable routing transactions or unknown reply intents.
+- Trusted worker scans now advance separate circular transaction/reply ID cursors,
+  including failed candidates. A routing transaction is compacted only after all
+  relevant events/scopes have durably succeeded or been rejected with fresh facts;
+  transient or unavailable Matrix observations leave it pending. Healthy events in
+  the same transaction can be accepted and later replay deduplicates them.
+- Failed Room observations are suppressed for that pass and have an eight-second
+  timeout. Routing and accepted-reply processing begin concurrently. These are
+  bounded sequential batches, not a guaranteed low-latency parallel Room SLA.
+- Reply retries preserve original payload, Matrix transaction and execution IDs.
+  Failed network sends remain unknown; fairness never reopens a completed model
+  execution. Cursor state is process-local; the durable intent is unchanged and
+  restarts resume circular scanning from the initial batch.
+- New meaningful PostgreSQL test uses its own additional disposable database to
+  avoid contaminating parallel global-worker tests. It covers twelve failed
+  routing transactions plus a later mixed failed/healthy Room transaction, and
+  twenty-one failed Room reply intents plus a healthy Room's attempted send.
+  The healthy event was queued once, transient transactions remained pending,
+  unknown reply identity was stable, and all twenty-two model executions remained
+  completed. No model was invoked. The nested test database is dropped with FORCE
+  even when the test task fails.
+- Final PostgreSQL runner: 25/25 passed. Strict agent-service all-target Clippy
+  passed. Membership-controller cursor and lifecycle behavior were not changed.
+
+## Final integrated owner roundtrip and restricted Room (2026-10-07)
+
+The rebuilt backend passed `HAGENCY_TEST_NATIVE_PKCE=1 python3 scripts/test-agent-integration.py` after queue fairness and AS compaction changes. The isolated run covered startup roundtrip, retired API 404s, real Pasion DCR/PKCE/consent, creation/pause policy, stable owner command replay, scoped device tool authorization, Matrix mention/ACK/start/reply and retirement with a late real join. It also bound the same permanent Agent to a restricted Space-child Room via existing Matrix invitation/join APIs, verified puppet membership and unchanged restricted join rules. This does not claim automatic Space-to-Room membership propagation. All three fixture databases and private success files were removed; no model was invoked and Palpo source remained unchanged.
+
+## Stopped three-database recovery (2026-10-07)
+
+`HAGENCY_TEST_NATIVE_PKCE=1 HAGENCY_TEST_BACKUP_RESTORE=1 python3 scripts/test-agent-integration.py` passed against the real embedded backend. All original/restored random databases and successful private files were cleaned up. See [exact restoration evidence and boundaries](BACKUP_RESTORE_VALIDATION.md): immutable identity/digests/sent reply, fresh native authority, explicit lease takeover, unfinished execution fenced unknown, new request/reply and late-join retirement all passed without inference.
+
+## Independent private filesystem recovery extension (2026-10-07)
+
+The same recovery flag passed with a different restored private directory and the original directory renamed offline before restart. Complete data/media/config, byte-identical AS/Matrix/Pasion keys and configured password pepper, real Matrix media upload/download, fresh native login/device, immutable reply/unknown execution, new roundtrip and kick/power/retirement regressions passed. See [exact copied paths and remaining whole-machine boundaries](BACKUP_RESTORE_VALIDATION.md).

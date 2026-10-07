@@ -1,10 +1,5 @@
 use clap::Parser;
-use hagency_server::{
-    MatrixServer,
-    admin::{Admin, Store},
-    config::Config,
-    frontend::Frontend,
-};
+use hagency_server::{MatrixServer, browser_auth::BrowserAuth, config::Config, frontend::Frontend};
 use salvo::prelude::*;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
@@ -19,9 +14,6 @@ struct Args {
     config: PathBuf,
     #[arg(long)]
     check_config: bool,
-    /// Offline import of a reviewed engagement/delegation/resource projection.
-    #[arg(long, conflicts_with_all = ["bootstrap_admin", "check_config", "list_config_files"])]
-    import_authority: Option<PathBuf>,
     #[arg(long)]
     list_config_files: bool,
     #[arg(long, requires = "bootstrap_password_file")]
@@ -49,31 +41,12 @@ async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
     let mut conf = Config::load(&args.config)?;
+    anyhow::ensure!(
+        conf.pasion.as_ref().is_some_and(|p| p.delegate_matrix_auth),
+        "Agent service requires Pasion delegated Matrix authentication"
+    );
     if args.check_config {
         println!("Configuration is valid.");
-        return Ok(());
-    }
-    if let Some(path) = &args.import_authority {
-        let authority = serde_json::from_slice::<hagency_operations::workflow::AuthoritySnapshot>(
-            &std::fs::read(path)?,
-        )?;
-        let server = conf.matrix.server_name.to_string().try_into()?;
-        let store = hagency_operations::store::Store::postgres(&conf.database_url).await?;
-        store
-            .bind(
-                conf.matrix.server_name.as_str(),
-                &conf.internal_origin().origin().ascii_serialization(),
-            )
-            .await?;
-        store.transaction(|state| {
-            let mut workflows = hagency_operations::workflow::Workflows::load(state)?;
-            workflows.import_authority(authority, &server)?;
-            workflows.save(state)?;
-            state["audit"].as_array_mut().ok_or_else(|| hagency_operations::fail(503,"workflow_state_invalid"))?
-                .push(serde_json::json!({"atMs":hagency_operations::now_ms(),"actor":"offline_operator","action":"operations.import_authority","result":"committed"}));
-            Ok(())
-        }).await?;
-        println!("Hagency authority imported. No server was started.");
         return Ok(());
     }
     let filter =
@@ -135,21 +108,156 @@ async fn run() -> anyhow::Result<()> {
             tracing::info!(user=%user,"bootstrap administrator created");
         }
     }
-    let store = Arc::new(Store::postgres(&conf.database_url).await?);
-    let admin = Admin::new(&conf, store).await?;
-    let notifications = admin.start_notifications(&conf)?;
-    let worker = conf
-        .account_config
-        .as_ref()
-        .map(|_| admin.start_account_worker());
+    // The new user/device domain uses its own schema and never imports Fleet state.
+    let mut agent_service = if conf.pasion.as_ref().is_some_and(|p| p.delegate_matrix_auth) {
+        let issuer = conf.public_origin.join("_pasion/")?;
+        let agent_store = hagency_agent_service::store::Store::open(
+            &conf.database_url,
+            conf.matrix.server_name.as_str(),
+            issuer.as_str(),
+        )
+        .await?;
+        let verifier = hagency_agent_service::identity::Verifier::new(
+            issuer.clone(),
+            conf.internal_origin().join("_pasion/oauth2/introspect")?,
+            conf.internal_origin(),
+            conf.matrix
+                .admin
+                .mas_secret
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("missing Pasion introspection credential"))?,
+            conf.matrix.server_name.to_string(),
+        )?;
+        Some(hagency_agent_service::api::App::new(
+            agent_store,
+            verifier,
+            conf.public_origin.clone(),
+            issuer,
+            conf.matrix.server_name.to_string(),
+        ))
+    } else {
+        None
+    };
+    let mut agent_inbox = if agent_service.is_some() {
+        let registration = hagency_server::agent_appservice::prepare(&conf).await?;
+        if let Some(app) = agent_service.take() {
+            agent_service = Some(app.with_matrix_client(
+                hagency_agent_service::matrix_client::MatrixClient::new(
+                    conf.internal_origin(),
+                    registration.as_token.clone(),
+                    conf.matrix.server_name.to_string(),
+                )?,
+            ));
+        }
+        Some(
+            hagency_agent_service::appservice::Inbox::open(
+                &conf.database_url,
+                registration.hs_token.clone(),
+            )
+            .await?
+            .with_limits(hagency_agent_service::appservice::Limits {
+                max_pending: conf.queue.max_pending as i64,
+                max_records: conf.queue.max_records as i64,
+                max_bytes: conf.queue.max_bytes as i64,
+            })?,
+        )
+    } else {
+        None
+    };
+    if let Some(app) = agent_service.take() {
+        let domain = hagency_agent_service::domain::DomainStore::open(
+            &conf.database_url,
+            conf.matrix.server_name.as_str(),
+            "_hagency_",
+        )
+        .await?;
+        let read: hagency_agent_service::gateway::ReadState = Arc::new(|room| {
+            Box::pin(async move {
+                let room: palpo::core::OwnedRoomId = room
+                    .try_into()
+                    .map_err(|_| hagency_agent_service::Error::Invalid("invalid_room_id"))?;
+                let frame = palpo::room::get_current_frame_id(&room)
+                    .await
+                    .map_err(|_| {
+                        hagency_agent_service::Error::Unavailable("matrix_state_unavailable")
+                    })?
+                    .ok_or(hagency_agent_service::Error::Unavailable(
+                        "matrix_state_unavailable",
+                    ))?;
+                let expected = palpo::room::state::get_full_state_ids(frame)
+                    .await
+                    .map_err(|_| {
+                        hagency_agent_service::Error::Unavailable("matrix_state_unavailable")
+                    })?
+                    .values()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let state = palpo::room::state::get_full_state(frame)
+                    .await
+                    .map_err(|_| {
+                        hagency_agent_service::Error::Unavailable("matrix_state_unavailable")
+                    })?;
+                let events = state
+                    .values()
+                    .map(|event| {
+                        serde_json::to_value(event).map_err(|_| {
+                            hagency_agent_service::Error::Unavailable("matrix_state_unavailable")
+                        })
+                    })
+                    .collect::<hagency_agent_service::Result<Vec<_>>>()?;
+                hagency_server::agent_appservice::validate_state_completeness(&expected, &events)?;
+                Ok(events)
+            })
+        });
+        let gateway = hagency_agent_service::gateway::Gateway::new(
+            read,
+            format!("@_hagency_service:{}", conf.matrix.server_name),
+        );
+        if let Some(inbox) = agent_inbox.take() {
+            let known_domain = domain.clone();
+            let service_mxid = format!("@_hagency_service:{}", conf.matrix.server_name);
+            agent_inbox = Some(inbox.with_known_user(Arc::new(move |mxid| {
+                let domain = known_domain.clone();
+                let service = service_mxid.clone();
+                Box::pin(async move {
+                    if mxid == service {
+                        Ok(true)
+                    } else {
+                        domain.known_puppet(&mxid).await
+                    }
+                })
+            })));
+        }
+        let transport = hagency_agent_service::transport::TransportStore::open(
+            &conf.database_url,
+            hagency_agent_service::transport::Limits {
+                event_ttl_ms: conf.queue.event_ttl_ms,
+                ..Default::default()
+            },
+        )
+        .await?;
+        agent_service = Some(app.with_domain(domain, gateway).with_transport(transport));
+    }
+    let browser_auth = BrowserAuth::new(&conf).await?;
     let mut matrix_router = Router::new();
     if conf.pasion.as_ref().is_some_and(|p| p.delegate_matrix_auth) {
         matrix_router =
             matrix_router.hoop(hagency_server::pasion::DelegatedAdminGuard::new(&conf)?);
     }
     matrix_router = matrix_router.push(matrix.router());
-    let mut router = admin
-        .router()
+    let mut router = Router::new();
+    if let Some(service) = &agent_service {
+        router = router.push(service.router());
+    }
+    if let Some(inbox) = &agent_inbox {
+        router = router.push(inbox.router());
+    }
+    if let Some(app) = &agent_service {
+        router = router.push(app.readiness_router());
+    }
+    let mut router = router
+        .push(browser_auth.router())
+        .push(Router::with_path("api/{**path}").goal(unknown_hagency_api))
         .push(matrix_router)
         .push(Router::with_path("healthz").get(health))
         .push(Frontend::new(&conf).router());
@@ -162,6 +270,15 @@ async fn run() -> anyhow::Result<()> {
             .push(router);
     }
     let service = matrix.service(router);
+    let identity_worker = agent_service
+        .as_ref()
+        .zip(agent_inbox.as_ref())
+        .and_then(|(app, inbox)| app.start_matrix_readiness(inbox.clone()));
+    let delivery_worker = agent_service
+        .as_ref()
+        .zip(agent_inbox.as_ref())
+        .and_then(|(app, inbox)| app.start_delivery(inbox.clone()));
+    let cleanup_worker = agent_service.as_ref().and_then(|app| app.start_cleanup());
     let acceptor = TcpListener::new(conf.listen).try_bind().await?;
     let server = Server::new(acceptor);
     let handle = server.handle();
@@ -180,11 +297,15 @@ async fn run() -> anyhow::Result<()> {
     });
     tracing::info!(listen=%conf.listen,public_origin=%conf.public_origin,"hagency-server started");
     server.serve(service).await;
-    if let Some(worker) = notifications {
+    if let Some(worker) = identity_worker {
         worker.abort();
         let _ = worker.await;
     }
-    if let Some(worker) = worker {
+    if let Some(worker) = delivery_worker {
+        worker.abort();
+        let _ = worker.await;
+    }
+    if let Some(worker) = cleanup_worker {
         worker.abort();
         let _ = worker.await;
     }
@@ -198,4 +319,9 @@ async fn run() -> anyhow::Result<()> {
 #[handler]
 async fn health() -> &'static str {
     "ok"
+}
+#[handler]
+async fn unknown_hagency_api(res: &mut Response) {
+    res.status_code(StatusCode::NOT_FOUND);
+    res.render(Json(serde_json::json!({"code":"not_found"})));
 }

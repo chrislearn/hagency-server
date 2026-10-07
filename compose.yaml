@@ -19,6 +19,7 @@ services:
     restart: unless-stopped
   server:
     build: .
+    # Image healthcheck uses readyz: startup includes a real AS send/receive probe.
     depends_on:
       postgres:
         condition: service_healthy

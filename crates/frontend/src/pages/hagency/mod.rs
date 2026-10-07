@@ -1,6 +1,6 @@
-pub mod accounts;
+pub mod agents;
 pub mod common;
-pub mod connections;
-pub mod inbox;
 pub mod projects;
-pub mod requests;
+
+mod project_controls;
+mod room_discovery;

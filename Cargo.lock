@@ -3894,15 +3894,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "hagency-contract"
+name = "hagency-agent-service"
 version = "0.1.0"
 dependencies = [
- "ruma-identifiers-validation",
- "ryu-js",
+ "diesel",
+ "diesel-async",
+ "hex",
+ "percent-encoding",
+ "rand 0.10.3",
+ "reqwest 0.13.5",
+ "salvo",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "subtle",
+ "tempfile",
  "thiserror 2.0.21",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -3929,26 +3938,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hagency-operations"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "diesel",
- "diesel-async",
- "hagency-contract",
- "rand 0.10.3",
- "reqwest 0.13.5",
- "salvo",
- "serde",
- "serde_json",
- "subtle",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "hagency-server"
 version = "0.1.0"
 dependencies = [
@@ -3961,9 +3950,9 @@ dependencies = [
  "diesel",
  "diesel-async",
  "figment",
- "hagency-contract",
- "hagency-operations",
+ "hagency-agent-service",
  "hex",
+ "libc",
  "opentelemetry 0.32.0",
  "palpo",
  "pasion-backend",
@@ -9259,12 +9248,6 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
-name = "ryu-js"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714"
 
 [[package]]
 name = "salsa20"

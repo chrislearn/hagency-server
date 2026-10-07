@@ -1,8 +1,8 @@
 pub mod appservices;
 pub mod auth;
+pub mod browser_auth;
 pub mod client;
 pub mod destinations;
-pub mod hagency;
 pub mod known_users;
 pub mod media;
 pub mod palpo_admin;

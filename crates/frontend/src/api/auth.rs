@@ -439,16 +439,16 @@ pub async fn handle_oauth_callback(
         // Pasion requires a fresh password when all OAuth sessions are ended.
         // Hold the preliminary token only in the host's HttpOnly session; its
         // replacement bridge revokes it after the admin grant succeeds.
-        crate::api::hagency::clear_session();
-        crate::api::hagency::bind_current_token().await?;
+        crate::api::browser_auth::clear_session();
+        crate::api::browser_auth::bind_current_token().await?;
         storage::remove_item("access_token");
         storage::remove_item("refresh_token");
         start_oauth_login(true).await?;
         return Ok(true);
     }
     storage::set_item("user_id", &whoami.user_id);
-    crate::api::hagency::clear_session();
-    let bound = crate::api::hagency::bind_current_token().await?;
+    crate::api::browser_auth::clear_session();
+    let bound = crate::api::browser_auth::bind_current_token().await?;
     if viewer["viewer"]["can_request_admin"] == true
         && viewer["viewer"]["matrix"]["mxid"] == whoami.user_id
         && !bound.is_admin
@@ -553,11 +553,11 @@ pub async fn refresh_oauth_token() -> bool {
 /// Verify the Matrix identity and live administrator role through the host.
 /// Pasion administrative scopes are checked separately by its own API.
 pub async fn verify_admin() -> Result<bool, HttpError> {
-    match crate::api::hagency::ensure_session().await {
+    match crate::api::browser_auth::ensure_session().await {
         Ok(session) => Ok(session.is_admin),
         Err(e) if e.status == 403 => Ok(false),
         Err(e) if e.status == 401 && handle_unauthorized().await => {
-            crate::api::hagency::ensure_session()
+            crate::api::browser_auth::ensure_session()
                 .await
                 .map(|s| s.is_admin)
         }
@@ -605,7 +605,7 @@ pub fn handle_forbidden() {
 // ── Logout ───────────────────────────────────────────────────────────────────
 
 pub async fn logout() -> Result<(), HttpError> {
-    crate::api::hagency::logout().await;
+    crate::api::browser_auth::logout().await;
     // Step 1: revoke the OAuth access token so it can no longer be used
     // against palpo's admin API.
     if let Some(token) = storage::get_item("access_token")
@@ -637,8 +637,12 @@ pub async fn logout() -> Result<(), HttpError> {
 
 // ── Session helpers ──────────────────────────────────────────────────────────
 
-pub fn is_authenticated() -> bool {
+pub fn has_oauth_token() -> bool {
     storage::get_item("access_token").is_some()
+}
+
+pub fn is_authenticated() -> bool {
+    has_oauth_token() || crate::api::browser_auth::has_session()
 }
 
 pub async fn get_identity() -> Option<(String, Option<String>, Option<String>)> {

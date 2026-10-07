@@ -4,6 +4,16 @@
 
 Palpo Matrix, Pasion authentication and Padmin/Hagency management in one Rust server.
 
+The integrated Agent Appservice is required. Users sign in through Pasion with
+their own Matrix account and permanently own their Agents. Project maps to a
+Space; its Rooms retain independent membership. The server manages creation
+rights and message transport; local hagency-client runs Codex and controls
+resource/tool policy. Browser pages are `/hagency/projects` and `/hagency/agents`.
+
+Fleet/Hafleet, Engagement/allocation approvals and authority import are removed.
+There is no old-data import or compatibility mode. Palpo/Pasion generic
+administration remains available through its existing component APIs.
+
 ## Local development
 
 Install Rust ≥ 1.99, [just](https://github.com/casey/just), Docker,

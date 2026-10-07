@@ -1,0 +1,453 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Hagency Matrix appservice receiver",
+    "version": "1.0.0",
+    "description": "Mandatory installed AS homeserver→Hagency interface. Authenticate with registration hs_token, never as_token or owner session/device token. Exact Bearer header or access_token query; if both present they must match; duplicate Authorization or duplicate query token rejected. Header preferred to avoid URL token logging. Matrix errors {errcode,error}: auth 403 M_FORBIDDEN, invalid 400 M_BAD_JSON, missing 404 M_NOT_FOUND, remaining M_UNKNOWN. AS acknowledgement is durable ingest; untrusted event contents are not authorization facts."
+  },
+  "paths": {
+    "/_matrix/app/v1/transactions/{transaction_id}": {
+      "put": {
+        "operationId": "acceptTransaction",
+        "description": "Commit canonical transaction digest, raw inbox and routing intent atomically before ACK. Same ID+same canonical content is idempotent; changed content conflicts. Durable ACK does not mean model execution or reply completion. Payload ≤2 MiB; pending queue defaults 10000 and 16 MiB; queue full returns 503 without ACK.",
+        "security": [
+          {
+            "homeserverBearer": []
+          },
+          {
+            "homeserverQueryToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong or missing homeserver token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown user or Room alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Transaction content mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or queue unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limiter rejection; framework-defined body."
+          }
+        },
+        "x-source": {
+          "file": "crates/agent-service/src/appservice.rs",
+          "anchors": [
+            "Router::with_path(\"transactions/{transaction_id}\")",
+            ".put(self.clone())"
+          ]
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Transaction"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_matrix/app/v1/ping": {
+      "post": {
+        "operationId": "pingAppservice",
+        "description": "Connectivity only, not readiness roundtrip. Optional transaction_id; payload ≤4096 bytes.",
+        "security": [
+          {
+            "homeserverBearer": []
+          },
+          {
+            "homeserverQueryToken": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong or missing homeserver token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown user or Room alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Transaction content mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or queue unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limiter rejection; framework-defined body."
+          }
+        },
+        "x-source": {
+          "file": "crates/agent-service/src/appservice.rs",
+          "anchors": [
+            "Router::with_path(\"ping\")",
+            ".post(self.clone())"
+          ]
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Ping"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_matrix/app/v1/users/{user_id}": {
+      "get": {
+        "operationId": "queryAppserviceUser",
+        "description": "Only known service/Agent puppets accepted. Unknown user returns 404; querying does not create a puppet.",
+        "security": [
+          {
+            "homeserverBearer": []
+          },
+          {
+            "homeserverQueryToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong or missing homeserver token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown user or Room alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or queue unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          }
+        },
+        "x-source": {
+          "file": "crates/agent-service/src/appservice.rs",
+          "anchors": [
+            "Router::with_path(\"users/{user_id}\")",
+            ".get(self.clone())"
+          ]
+        }
+      }
+    },
+    "/_matrix/app/v1/rooms/{room_alias}": {
+      "get": {
+        "operationId": "queryAppserviceRoom",
+        "description": "Always 404: this appservice does not publish Room aliases.",
+        "security": [
+          {
+            "homeserverBearer": []
+          },
+          {
+            "homeserverQueryToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "room_alias",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong or missing homeserver token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown user or Room alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or queue unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatrixError"
+                }
+              }
+            }
+          }
+        },
+        "x-source": {
+          "file": "crates/agent-service/src/appservice.rs",
+          "anchors": [
+            "Router::with_path(\"rooms/{room_alias}\")",
+            ".get(self.clone())"
+          ]
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Empty": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false,
+        "examples": [
+          {}
+        ]
+      },
+      "Ping": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional string; maximum 255 UTF-8 bytes and no control characters."
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "examples": [
+          {}
+        ]
+      },
+      "Transaction": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "maxItems": 5000,
+            "items": {}
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "examples": [
+          {
+            "events": []
+          }
+        ]
+      },
+      "MatrixError": {
+        "type": "object",
+        "properties": {
+          "errcode": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "errcode",
+          "error"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "errcode": "M_FORBIDDEN",
+            "error": "appservice_authentication_required"
+          }
+        ]
+      }
+    },
+    "securitySchemes": {
+      "homeserverBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "homeserverQueryToken": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "access_token"
+      }
+    }
+  },
+  "x-source-sha256": {
+    "crates/agent-service/src/appservice.rs": "c5d9a3bba1bb4e3b3dcc0624cb5acd19751f0a9a61cf18e38fd1d1f3a282892f"
+  }
+}

@@ -34,8 +34,7 @@ pub fn watch(root: &Path, options: &Options, stopping: &AtomicBool) -> Result<()
     let config = config.canonicalize()?;
     let mut roots = vec![
         root.join("crates/backend"),
-        root.join("crates/hagency-contract"),
-        root.join("crates/operations"),
+        root.join("crates/agent-service"),
         root.join("Cargo.toml"),
         root.join("Cargo.lock"),
         config.clone(),

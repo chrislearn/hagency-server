@@ -85,10 +85,6 @@ impl PasionConfig {
                 .is_some_and(|p| p.get("cedar_policy_file").is_some()),
             "Pasion policy files are managed through resources_dir"
         );
-        anyhow::ensure!(
-            !self.delegate_matrix_auth || host.account_config.is_none(),
-            "legacy web-admin account approval cannot be combined with Pasion delegated registration"
-        );
         Ok(())
     }
     pub fn resources(&self) -> anyhow::Result<Vec<HttpResource>> {

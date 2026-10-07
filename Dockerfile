@@ -14,6 +14,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Build the Dioxus WASM app with the same pinned Pasion source as the backend.
 FROM rust:1.99-trixie AS web-tools
 ARG TARGETARCH
+# Keep simultaneous backend/WASM compilation bounded in small builders.
+ENV CARGO_BUILD_JOBS=1
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
 RUN case "$TARGETARCH" in arm64) dx_arch=aarch64 ;; amd64) dx_arch=x86_64 ;; *) exit 1 ;; esac \
@@ -48,13 +50,19 @@ RUN --mount=type=cache,id=hagency-pasion-wasm-registry,target=/usr/local/cargo/r
     prepare-pasion --source /pasion --output /pasion-resources
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends libpq5 ca-certificates gosu && rm -rf /var/lib/apt/lists/* \
-    && useradd --uid 10001 --create-home hagency && mkdir -p /app/data && chown hagency:hagency /app/data
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 ca-certificates gosu curl && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --create-home hagency && mkdir -p /app/data && chmod 700 /app/data && chown hagency:hagency /app/data
 WORKDIR /app
+ARG HAGENCY_SOURCE_FINGERPRINT=unspecified
+LABEL org.hagency.protocol="owner-agent-v1" \
+      org.hagency.source-fingerprint="$HAGENCY_SOURCE_FINGERPRINT"
 COPY --from=build /build/hagency-server /usr/local/bin/hagency-server
 COPY --from=pasion-assets /pasion-resources /app/resources/pasion
 COPY --from=frontend-assets /frontend-resources /app/resources/frontend/public
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 EXPOSE 8088
+# Public healthz is listener-only; readyz requires the mandatory AS roundtrip.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=90s --retries=6 \
+    CMD curl --fail --silent --max-time 2 http://127.0.0.1:8088/readyz || exit 1
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["--config", "/app/config/hagency.toml"]

@@ -22,8 +22,6 @@ pub struct RuntimeConfig {
     pub oauth_enabled: bool,
     #[serde(default)]
     pub pasion_enabled: bool,
-    #[serde(default)]
-    pub legacy_account_approval_enabled: bool,
     /// Pasion public URL for browser OAuth2 redirects (e.g. http://localhost:7080)
     #[serde(default)]
     pub pasion_public_url: String,

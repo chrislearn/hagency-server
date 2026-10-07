@@ -1,0 +1,441 @@
+use crate::{
+    Error, Result,
+    api::now_ms,
+    appservice::Inbox,
+    gateway::Gateway,
+    matrix_client::MatrixClient,
+    transport::{RoutedEvent, TransportStore},
+};
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+
+/// Only canonical plaintext text events enter the model queue. In particular,
+/// HTML-looking mentions, edits, and encrypted bodies do not create prompts.
+fn parse_event(raw: &Value) -> Option<RoutedEvent> {
+    if raw["type"] != "m.room.message"
+        || raw.get("state_key").is_some()
+        || raw["content"]["msgtype"] != "m.text"
+    {
+        return None;
+    }
+    let c = &raw["content"];
+    if c["m.relates_to"]["rel_type"] == "m.replace" {
+        return None;
+    }
+    let event_id = raw["event_id"].as_str()?;
+    let room = raw["room_id"].as_str()?;
+    let sender = raw["sender"].as_str()?;
+    let body = c["body"].as_str()?;
+    if !event_id.starts_with('$')
+        || !room.starts_with('!')
+        || !sender.starts_with('@')
+        || event_id.len() > 255
+        || room.len() > 255
+        || sender.len() > 255
+        || body.is_empty()
+        || body.len() > 64 * 1024
+    {
+        return None;
+    }
+    let mentioned_mxids: BTreeSet<String> = c["m.mentions"]["user_ids"]
+        .as_array()
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let thread_root = if c["m.relates_to"]["rel_type"] == "m.thread" {
+        Some(c["m.relates_to"]["event_id"].as_str()?.to_owned())
+    } else {
+        None
+    };
+    Some(RoutedEvent {
+        event_id: event_id.into(),
+        room_id: room.into(),
+        sender_mxid: sender.into(),
+        body: body.into(),
+        mentioned_mxids,
+        thread_root,
+        encrypted: false,
+        is_edit: false,
+    })
+}
+async fn route(inbox: &Inbox, t: &TransportStore, g: &Gateway, cursor: &mut String) -> Result<()> {
+    let transactions = if cursor.is_empty() {
+        inbox.pending().await?
+    } else {
+        t.routing_candidates_after(cursor, 10).await?
+    };
+    let mut unavailable_rooms = BTreeSet::new();
+    for transaction in transactions {
+        *cursor = transaction.id.clone();
+        let mut retry = false;
+        for raw in transaction.body["events"].as_array().into_iter().flatten() {
+            let Some(event) = parse_event(raw) else {
+                continue;
+            };
+            let scopes = match t.routing_scopes(&event.room_id).await {
+                Ok(scopes) => scopes,
+                Err(_) => {
+                    retry = true;
+                    continue;
+                }
+            };
+            for scope in scopes {
+                if unavailable_rooms.contains(&scope.room_id) {
+                    retry = true;
+                    continue;
+                }
+                let observed = tokio::time::timeout(
+                    std::time::Duration::from_secs(8),
+                    g.delivery(
+                        &scope.room_id,
+                        &scope.space_id,
+                        &scope.owner_mxid,
+                        &event.sender_mxid,
+                        &scope.puppet_mxid,
+                    ),
+                )
+                .await;
+                let f = match observed {
+                    Ok(Ok(f)) => f,
+                    _ => {
+                        // No fresh facts were obtained, so this is not proof of
+                        // definitive authorization denial. Retain routing intent.
+                        unavailable_rooms.insert(scope.room_id.clone());
+                        retry = true;
+                        continue;
+                    }
+                };
+                match t
+                    .ingest_routed_received(
+                        &scope.binding_id,
+                        event.clone(),
+                        &f,
+                        transaction.received_at_ms,
+                        now_ms(),
+                    )
+                    .await
+                {
+                    // A permanently rejected message cannot block subsequent
+                    // transactions. Storage/overload failures retain the intent.
+                    Ok(_) => (),
+                    Err(e @ (Error::Unauthorized(_) | Error::Invalid(_) | Error::Conflict(_))) => {
+                        inbox
+                            .rejected(
+                                &transaction.id,
+                                &event.event_id,
+                                &scope.binding_id,
+                                &e.to_string(),
+                            )
+                            .await?;
+                    }
+                    Err(_) => retry = true,
+                }
+            }
+        }
+        if retry {
+            continue;
+        }
+        // A crash before this write causes an idempotent replay of routing only.
+        inbox.routed(&transaction.id).await?;
+    }
+    Ok(())
+}
+async fn send(
+    t: &TransportStore,
+    g: &Gateway,
+    m: &MatrixClient,
+    cursor: &mut String,
+) -> Result<()> {
+    let mut unavailable_rooms = BTreeSet::new();
+    for candidate in t.reply_candidates_after(cursor, 20, now_ms()).await? {
+        *cursor = candidate.id.clone();
+        let scope = match t.binding_scope(&candidate.binding_id).await {
+            Ok(scope) => scope,
+            Err(Error::Unauthorized(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        if unavailable_rooms.contains(&scope.room_id) {
+            continue;
+        }
+        let observed = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            g.delivery(
+                &scope.room_id,
+                &scope.space_id,
+                &scope.owner_mxid,
+                &candidate.requester_mxid,
+                &scope.puppet_mxid,
+            ),
+        )
+        .await;
+        let f = match observed {
+            Ok(Ok(f)) => f,
+            _ => {
+                unavailable_rooms.insert(scope.room_id.clone());
+                continue;
+            }
+        };
+        let intent = match t.claim_reply(&candidate.id, &f, now_ms()).await {
+            Ok(intent) => intent,
+            Err(Error::Unauthorized(_) | Error::Conflict(_)) => {
+                t.block_reply_delivery(&candidate.id, &f, now_ms()).await?;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        let worker = intent
+            .worker_token
+            .as_deref()
+            .ok_or(Error::Unavailable("missing_sender_claim"))?;
+        let content = json!({"msgtype":"m.text","body":intent.body,
+            "m.relates_to":{"rel_type":"m.thread","event_id":intent.thread_root,
+                "is_falling_back":true,"m.in_reply_to":{"event_id":intent.thread_root}}});
+        let outcome = m
+            .send(
+                &intent.puppet_mxid,
+                &intent.room_id,
+                &intent.matrix_txn_id,
+                content,
+            )
+            .await;
+        if matches!(outcome, Err(Error::Conflict("matrix_permission_missing"))) {
+            t.confirm_reply_permission_denied(&intent.id, worker, now_ms())
+                .await?;
+        } else {
+            t.confirm_reply(
+                &intent.id,
+                worker,
+                outcome.as_ref().ok().map(String::as_str),
+                now_ms(),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+pub(crate) fn start(
+    inbox: Inbox,
+    t: TransportStore,
+    g: Gateway,
+    m: MatrixClient,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut route_cursor = String::new();
+        let mut reply_cursor = String::new();
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let _ = t.invalidate_stale_dispatches(now_ms()).await;
+            // Durable intents stay pending on transient failures. A failed routing
+            // pass must not block already accepted reply intents from being sent.
+            let _ = tokio::join!(
+                route(&inbox, &t, &g, &mut route_cursor),
+                send(&t, &g, &m, &mut reply_cursor)
+            );
+        }
+    })
+}
+pub(crate) fn start_cleanup(
+    domain: crate::domain::DomainStore,
+    g: Gateway,
+    m: MatrixClient,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut cursor = String::new();
+        let mut leader = false;
+        let mut cleanup_cursor = (String::new(), String::new());
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if !leader {
+                leader = domain.try_membership_controller().await.unwrap_or(false);
+                if !leader {
+                    continue;
+                }
+            }
+            // Fair full cursor sweep includes already-left bindings. Matrix can
+            // finish a timed-out join after retirement was locally confirmed.
+            if let Ok(scopes) = domain.reconciliation_scopes(&cursor, 20).await {
+                if scopes.is_empty() {
+                    cursor.clear();
+                }
+                for scope in scopes {
+                    let (Some(binding), Some(room), Some(space), Some(generation)) = (
+                        scope.binding_id.as_deref(),
+                        scope.room_id.as_deref(),
+                        scope.space_id.as_deref(),
+                        scope.binding_generation,
+                    ) else {
+                        continue;
+                    };
+                    cursor = binding.to_owned();
+                    if scope.binding_state.as_deref() == Some("active") {
+                        if let Ok(Ok(facts)) = tokio::time::timeout(
+                            std::time::Duration::from_secs(8),
+                            g.room(room, space, &scope.owner_mxid, Some(&scope.puppet_mxid)),
+                        )
+                        .await
+                        {
+                            let _ = domain
+                                .suspend_membership_loss_trusted(
+                                    binding,
+                                    generation,
+                                    &facts,
+                                    now_ms(),
+                                )
+                                .await;
+                        }
+                        continue;
+                    }
+                    if scope.binding_state.as_deref() != Some("joining") {
+                        // A fresh generation check keeps a stale terminal sweep
+                        // from issuing leave after the owner requested rebind.
+                        if !domain
+                            .departure_desired_trusted(binding, generation)
+                            .await
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        let Ok(facts) = g
+                            .room(room, space, &scope.owner_mxid, Some(&scope.puppet_mxid))
+                            .await
+                        else {
+                            continue;
+                        };
+                        if facts.puppet_in_room && m.leave(&scope.puppet_mxid, room).await.is_err()
+                        {
+                            continue;
+                        }
+                        if let Ok(observed) = g
+                            .room(room, space, &scope.owner_mxid, Some(&scope.puppet_mxid))
+                            .await
+                        {
+                            let _ = domain
+                                .confirm_left_trusted(binding, generation, &observed, now_ms())
+                                .await;
+                        }
+                        continue;
+                    }
+                    if g.service_invited(room).await.unwrap_or(false) {
+                        let _ = m.join_invited_service(room).await;
+                    }
+                    let Ok(facts) = g
+                        .room(room, space, &scope.owner_mxid, Some(&scope.puppet_mxid))
+                        .await
+                    else {
+                        continue;
+                    };
+                    let Ok(agent) = domain
+                        .verify_provisioning_trusted(binding, generation, &facts, false, now_ms())
+                        .await
+                    else {
+                        continue;
+                    };
+                    if !facts.puppet_in_room {
+                        let Ok(invited) = g.puppet_invited(room, &scope.puppet_mxid).await else {
+                            continue;
+                        };
+                        if m.provision(&agent, room, !invited).await.is_err() {
+                            continue;
+                        }
+                    }
+                    if let Ok(observed) = g
+                        .room(room, space, &scope.owner_mxid, Some(&scope.puppet_mxid))
+                        .await
+                    {
+                        let _ = domain
+                            .verify_provisioning_trusted(
+                                binding,
+                                generation,
+                                &observed,
+                                true,
+                                now_ms(),
+                            )
+                            .await;
+                    }
+                }
+            }
+            let Ok(scopes) = domain
+                .cleanup_scopes_after(&cleanup_cursor.0, &cleanup_cursor.1, 20)
+                .await
+            else {
+                continue;
+            };
+            if scopes.is_empty() {
+                cleanup_cursor = (String::new(), String::new());
+            }
+            for scope in scopes {
+                cleanup_cursor = (
+                    scope.agent_id.clone(),
+                    scope.binding_id.clone().unwrap_or_default(),
+                );
+                let Some(binding) = scope.binding_id.as_deref() else {
+                    let _ = domain
+                        .confirm_retired_trusted(&scope.agent_id, scope.agent_generation, now_ms())
+                        .await;
+                    continue;
+                };
+                let (Some(room), Some(space), Some(generation)) = (
+                    scope.room_id.as_deref(),
+                    scope.space_id.as_deref(),
+                    scope.binding_generation,
+                ) else {
+                    continue;
+                };
+                let Ok(mut facts) = g
+                    .room(room, space, &scope.owner_mxid, Some(&scope.puppet_mxid))
+                    .await
+                else {
+                    continue;
+                };
+                if facts.puppet_in_room {
+                    if m.leave(&scope.puppet_mxid, room).await.is_err() {
+                        continue;
+                    }
+                    let Ok(observed) = g
+                        .room(room, space, &scope.owner_mxid, Some(&scope.puppet_mxid))
+                        .await
+                    else {
+                        continue;
+                    };
+                    facts = observed;
+                }
+                let _ = domain
+                    .confirm_left_trusted(binding, generation, &facts, now_ms())
+                    .await;
+            }
+        }
+    })
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn canonical_mentions_and_threads_only() {
+        let raw = json!({"type":"m.room.message","event_id":"$e","room_id":"!r:x","sender":"@u:x",
+            "content":{"msgtype":"m.text","body":"hello","formatted_body":"<a href=\"https://matrix.to/#/@bot:x\">bot</a>"}});
+        assert!(parse_event(&raw).unwrap().mentioned_mxids.is_empty());
+        let mut mention = raw.clone();
+        mention["content"]["m.mentions"] = json!({"user_ids":["@bot:x"]});
+        mention["content"]["m.relates_to"] = json!({"rel_type":"m.thread","event_id":"$root"});
+        let parsed = parse_event(&mention).unwrap();
+        assert!(parsed.mentioned_mxids.contains("@bot:x"));
+        assert_eq!(parsed.thread_root.as_deref(), Some("$root"));
+        mention["content"]["m.relates_to"]["rel_type"] = json!("m.replace");
+        assert!(parse_event(&mention).is_none());
+        let mut encrypted = raw;
+        encrypted["type"] = json!("m.room.encrypted");
+        assert!(parse_event(&encrypted).is_none());
+    }
+}
+
+#[cfg(test)]
+#[path = "worker_fairness_tests.rs"]
+mod fairness_tests;

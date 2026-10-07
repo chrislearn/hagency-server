@@ -29,8 +29,6 @@ futures = "0.3.31"
 gloo-net = "0.7"
 gloo-storage = "0.4.0"
 gloo-timers = "0.4"
-hagency-contract = { path = "crates/hagency-contract" }
-hagency-operations = { path = "crates/operations" }
 hex = "0.4"
 js-sys = "0.3.95"
 libc = "0.2"

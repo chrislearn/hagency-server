@@ -92,7 +92,7 @@ try{
  const promotedBridge=await fetch(base+'/api/login/token',{method:'POST',headers:{Origin:base,Authorization:'Bearer '+promoted.access_token,'content-type':'application/json'},body:'{}'});assert.equal(promotedBridge.status,200);const promotedSession=promotedBridge.headers.get('set-cookie').split(';')[0];assert.equal((await promotedBridge.json()).isAdmin,true);
  await adminApi(administrative.access_token,'/users/'+prefix.id,{admin:false});
  assert.equal((await fetch(base+'/_palpo/admin/v1/server_version',{headers:{Authorization:'Bearer '+promoted.access_token}})).status,403,'Role revocation blocks the next call with an existing OAuth token');
- assert.equal((await fetch(base+'/api/fleets',{headers:{cookie:promotedSession}})).status,403,'Role revocation also blocks Hagency cookie sessions');
+ assert.equal((await fetch(base+'/api/fleets',{headers:{cookie:promotedSession}})).status,404,'Removed Fleet endpoint stays unavailable with an existing browser cookie');
  assert.equal(execFileSync('psql',[matrix,'-Atc',`SELECT is_admin FROM users WHERE id='@prefixuser:localhost:${port}'`],{encoding:'utf8'}).trim(),'f');
  const oldRegistration=await fetch(base+'/account-request',{redirect:'manual'});assert.equal(oldRegistration.status,302);assert.equal(oldRegistration.headers.get('location'),'/_pasion/register');
  console.log('PASS unified Pasion accounts: first administrator bootstrap, real PKCE consent, member scope denial, Matrix role synchronization and immediate revocation across Matrix/Hagency');

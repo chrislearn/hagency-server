@@ -1,67 +1,49 @@
-# Palpo web-admin migration and unified accounts
+# Palpo/Pasion management and the new Agent boundary
 
 [中文](WEB_ADMIN_PARITY.zh-CN.md) · [Documentation](README.md)
 
-Source baseline: local Palpo `web-admin` at frontend redesign commit
-`1032153e` (the embedded Palpo revision is recorded in Cargo.toml).
-The goal is equivalent Hagency workflows in Padmin's Dioxus UI, not identical
-HTML, DOM selectors or a Node service. Account authentication intentionally
-changes to Pasion in the default deployment.
+The integrated Dioxus console preserves generic Palpo/Pasion administration.
+The old Hagency Fleet/Engagement approval product has been replaced, rather than
+ported as a compatible second mode. Upstream dependency revisions and copied
+frontend provenance remain recorded in Cargo.toml and NOTICE.
 
-| Workflow | Rust/Dioxus implementation | Verification |
-| --- | --- | --- |
-| Provider grant, isolated App Service, resumable install, drift detection | backend admin/fleet.rs; frontend Fleet connections | HTTP contract; live Matrix integration |
-| Outbound migration/rotation, queue limits, leases, ACK, online/current-generation proof | backend admin/outbound.rs; connections and capacity inspection | HTTP contract; live Matrix integration |
-| Owner-only pairing/config download, exact event receipt and reception memberships | backend admin/workflow.rs; My Fleets | HTTP contract; live Matrix integration |
-| Project creation or existing room binding, encrypted private approval room, owner/member authority | backend admin/workflow.rs; Projects | HTTP contract; live Matrix integration |
-| Published resource and role selection, named Agent, token/daily quota, durable request/retry | backend admin/workflow.rs; Request an agent | HTTP contract; frontend role/resource checks |
-| Provider decisions, actual running configuration/preparation, stale status, actual room admission before usable | backend admin/workflow.rs; Agent requests | HTTP contract; live Matrix integration; readiness grouping regression |
-| Managed identities, restricted rename, retirement with Matrix deactivation/membership checks | backend admin/fleet.rs; Agent identities | HTTP contract |
-| Audit records, owner isolation, credential redaction, Origin/CSRF/live role enforcement | backend admin/api.rs | HTTP contract |
-| Callback proof renewal with one-minute retry; failures shown and submission blocked | Hagency common.rs and page warnings | source comparison; compile; browser inspection |
-| Native account requests/receipts and private Matrix administrator-room approval | backend admin/accounts.rs; Hagency approvals | preserved for explicit native-auth mode; HTTP contract |
+| Capability | Current implementation / boundary |
+| --- | --- |
+| Matrix users/devices, Rooms/Spaces/members/state, media, reports, destinations | Existing generic frontend pages call Palpo's own APIs |
+| Appservice listing, registration tokens, server status/actions/notices/notifications | Existing Palpo management pages and API authority checks retained |
+| Human registration/password/account status/admin role | Pasion account center/admin APIs and normal provisioning |
+| OAuth/individual sessions, upstream providers/links, audit, connectors, notifications | Existing Pasion management pages and Pasion authorization retained |
+| Personal Pasion PKCE login, cookie/CSRF bridge, live admin verification and grant handover | Independent `backend/browser_auth.rs`; no old domain store |
+| Agent owner, Project=Space, independent Room bindings, creation policy | New PostgreSQL `agent-service/domain`; `/hagency/projects`, `/hagency/agents` |
+| Required integrated Appservice, durable AS ACK, owner event queue, fenced execution lease and reply outbox | New `agent-service` and trusted backend Matrix adapters/workers |
+| Local Codex/models, Room/user quotas, requester filtering and risky tool decisions | The user's `chrislearn/hagency-client`; no server administrator approval |
+| Encrypted Room Agent execution | Deferred pending client crypto; no claim of working encrypted execution |
 
-The migrated request screen now shows actual `provider.serving` framework,
-model, reasoning and tier, fulfillment phase/error, delivery/review explanations,
-stale status and the original attention/review/usable grouping. An active but
-unusable agent remains outside Ready to use. Resource cards can populate the
-Agent definition. Callback policy is visible and an unconfigured callback
-choice is disabled. Renewal errors remain visible during the retry interval.
+Removed: Fleet/Hafleet enrollment/pairing/isolated per-install Appservices,
+provider resource selection and allocation approvals, Engagement/delegation
+import, private account-approval rooms, old request/inbox screens, old miniapp
+aliases and native-password UI. Their code, configuration and compatibility
+aliases are not part of this release. See [cutover details](../crates/agent-service/legacy-cutover.md).
 
-## Intentional identity changes
+Pasion owns human identity. Its provisioning synchronizes Matrix records/roles.
+The frontend uses member scopes for users and requests extra administrative
+scopes only for a verified administrator. Palpo administration checks its local
+Matrix role and the host's live Pasion administrative scope. Pasion's own APIs
+check their role/scope. Native human-password/account writes are refused at the
+existing delegated-auth boundary; Matrix profile/service identity operations
+retain their normal APIs.
 
-Default `[hagency].delegate_matrix_auth = true` means Pasion owns account
-registration, passwords, account status and administrator role. Its existing
-provisioning jobs synchronize Matrix identities/roles. The integrated console
-has one Pasion login entry; members get client/device scopes, administrators
-continue authorization for their verified account with admin scopes.
+The first administrator CLI retains Pasion password hashing, bootstrap lock and
+normal provisioning. Explicit `--link-existing-matrix-admin` links an existing
+active human administrator without changing their Matrix identity; it never
+imports Fleet state or overwrites an existing Pasion account.
 
-The preliminary member authorization stays only in the host's HttpOnly session
-until its replacement has been verified. The host then revokes that preliminary
-OAuth grant directly in Pasion, preserving the current Matrix device. This
-avoids a second password prompt and leaves no preliminary active grant after
-successful handover. Bearer/refresh tokens remain memory-only in the frontend.
+The new browser BFF is a closed set of Project/Agent/binding operations, not an
+arbitrary proxy or a native device executor. Body fields cannot override owner,
+Matrix membership or administrator facts. Project policy is governed by real
+Space administration rights; server-admin status alone is not an ownership grant.
+Padmin's optional separate `palpo_admin` sidecar remains outside this host.
 
-Palpo's embedded admin middleware checks its local Matrix role. The host adds
-live Pasion introspection with the exact Palpo admin scope. Native account
-creation/password writes are refused at this boundary; Matrix profile updates
-and App Service identities remain available. Pasion's own APIs enforce their
-admin role/scope. Revocations are checked on the next request without a cached
-introspection grace period. Human creation/reset/role changes go through
-Pasion Account management; CSV native-user import is hidden in this mode.
-
-The old native Matrix signup/Robrix approval form is not a second registration
-system in a unified deployment: `/account-request` redirects to Pasion signup,
-and its legacy approval menu is hidden. Its optional business workflow is
-preserved in compatibility mode, not reimplemented as Pasion approval policy.
-A deployment requiring that exact pre-registration approval policy still needs
-a Pasion policy/workflow integration before replacing its legacy signup flow.
-
-The first administrator CLI creates a Pasion account, hashes through Pasion's
-password manager, holds Pasion's bootstrap lock, and queues normal provisioning.
-An explicit `--link-existing-matrix-admin` option preserves an existing active
-human administrator's Matrix ID. Existing Pasion accounts/administrators are
-never overwritten by bootstrap.
-
-Padmin's separate optional `palpo_admin` operation sidecar is not part of Palpo
-`web-admin` and remains outside this migration; its menus remain disabled.
+Executed evidence belongs in VALIDATION.md. Backend/frontend compilation and
+controlled BrowserAuth checks do not establish full browser visual parity or
+successful live Matrix/PKCE transport by themselves.

@@ -10,13 +10,14 @@ Cargo workspace 采用类似 Pasion 的后端、前端组织方式：
 ```text
 crates/
 ├─ backend/   # hagency-server：内嵌 Palpo、Pasion 和 Hagency API
+├─ agent-service/ # 永久 Agent 域和投递协议
 └─ frontend/  # hagency-frontend：基于复制的 Padmin 源码，使用 Dioxus/WASM
 xtask/       # 开发、配置工具（workspace 成员）
 resources/   # 生成的前端与 Pasion 资源，不提交到 Git
 ```
 
-前端将 Padmin 的 Matrix 管理页面与原 web-admin 的项目、Agent 资源选择和申请、提供方授权和配对、Agent 身份、兼容模式账号审批及审计功能结合。
-Rust 后端在 `/` 托管前端；Matrix 路径为 `/_matrix`，Palpo 管理 API 为 `/_palpo`，Matrix 发现路径为 `/.well-known/matrix`，Hagency API 为 `/api`，Pasion 挂载在 `/_pasion/`。
+前端将 Padmin 的通用 Matrix/Pasion 管理页面与新的永久 Agent 归属、Project/Room 绑定和创建政策界面结合。
+Rust 后端在 `/` 托管前端；Matrix 路径为 `/_matrix`，Palpo 管理 API 为 `/_palpo`，Matrix 发现路径为 `/.well-known/matrix`，原生 Hagency API 为 `/api/hagency/v1`，网页管理 BFF 为 `/api/browser/hagency/v1`，Pasion 挂载在 `/_pasion/`。
 `/healthz` 表示进程 HTTP 服务可访问，不代表异步账号同步已经完成。
 
 ## 目录
@@ -39,13 +40,13 @@ Rust 后端在 `/` 托管前端；Matrix 路径为 `/_matrix`，Palpo 管理 API
 ```text
 hagency-server（一个进程、一个端口）
 ├─ MatrixServer：Palpo 初始化、Matrix/管理/发现路由及后台任务
-├─ Rust web-admin：会话、Fleet/Agent、项目申请、兼容模式账号审批
-├─ outbound relay：持久化事务、租约、ACK 和已发布快照
+├─ BrowserAuth/BFF：个人会话与 Project/Agent 管理
+├─ 必装 Agent Appservice：持久化 inbox、设备租约 fencing 与回复 outbox
 ├─ PasionServer：/_pasion/ 下的 OAuth/OIDC、账号界面/API 和后台任务
 └─ 集成 Padmin + Hagency 的 Dioxus/WASM 静态资源
            │
            └─ PostgreSQL 服务
-              ├─ hagency：管理状态和持久化 outbound 队列
+              ├─ hagency：新 Agent 域和持久化 inbox/outbox
               ├─ palpo：Matrix homeserver 数据
               └─ pasion：认证数据
 ```
@@ -104,36 +105,32 @@ Pasion 是默认身份提供方。宿主通过 `/config.json` 发布非敏感运
 
 Pasion 管理密码、注册、账号状态和管理员角色，后台 provisioning 任务将对应 Matrix 身份和管理员标记同步到 Palpo。
 在 `/pasion/accounts` 管理人员账号，`/users` 查看 Matrix 记录和服务身份。修改密码和创建人员账号走 Pasion。
-Hagency 保存项目、提供方、申请状态和业务权限，不建立另一套密码账号库。
+Hagency 保存永久 Agent owner、Project/Room 创建权和持久化投递，不建立另一套密码账号库。
 
 宿主创建预留的公开 OAuth 客户端，并自动推导 `/oauth/callback`，无需客户端密钥或单独部署前端。
 `POST /api/login/token` 验证 token 后发放 HttpOnly 会话 cookie 和 CSRF token。
 Palpo 管理接口还在宿主边界检查 Pasion 实时 introspection 与精确的 `urn:palpo:admin:*` scope；即使账号是管理员，仅有成员 scope 的 token 也无法管理服务器。
 关闭 introspection 缓存后，撤销角色或 token 会在下一次请求生效。Pasion 自身的管理 API 也检查 scope 和当前角色。
 
-如需原生 Matrix 认证兼容模式，可在 Pasion 配置中设置 `[hagency].delegate_matrix_auth = false`。
-该模式使用 Palpo 原生密码登录和原 web-admin 的 Matrix 账号审批流程，默认统一部署不使用它。
+集成部署要求 Pasion 委托认证，没有 Hagency 原生密码或账号审批兼容模式。
 
 前端来源和上游许可证信息见根目录 `NOTICE`。
 复制的 Padmin 基于提交 `83d4567470ada808b89914aa0c786cdc3a7ac89a`。
 
 ## 客户端 Pasion 登录与自助接入
 
-`hagency-client` 可以通过 Pasion 登录后自动创建自己的 Fleet，保存配置并启动 outbound 连接，无需手工下载和导入。首次账号绑定仍需本地访问权限；后续登录固定为同一服务器和账号。
+`chrislearn/hagency-client` 使用用户自己的 Matrix 账号通过 Pasion PKCE 登录。
+原生 `/api/hagency/v1` 核验 Pasion proof 与 Matrix whoami 后建立短期用户授权、
+登记本地设备；拒绝 browser Cookie/Origin。设备轮换/撤销、session 与真实时钟在
+敏感事务内重验。
 
-在 Hagency 自己的配置中开放自助接入（默认关闭）：
+集成 Appservice 必装并由服务器管理，用户无需登记 Fleet 或自行安装 Appservice。
+Agent 的 owner 永久固定，Project/Room bindings 独立。Space 管理者设置成员默认
+创建权和 allow/deny 清单，deny 优先；禁止新建不会暂停已有 Agent。本地 Codex、
+资源额度和工具风险决策由客户端管理。
 
-```toml
-[fleet_access]
-allow_self_service = true
-max_per_user = 3
-```
-
-管理员只需开放政策，无需逐次批准普通用户的接入。每个本地安装通过固定安装 ID 幂等创建自己的 Fleet，每个 Fleet 对应一个 App Service；注册权限和 Pasion 共享密钥留在服务器。关闭自助接入会阻止新接入，不会撤销已经配置的连接。
-
-原生接口位于 `/_hagency/client/v1/`：公开 discovery；identity 验证 Pasion 用户 token；fleets 创建并返回本人的配置；fleets/{id}/connect 自动验证接入。认证接口只接受原生 Bearer 请求，不接受浏览器 Cookie/Origin。创建只接受 installationId/name，所有者由验证后的身份决定，不授予 Matrix 管理员权限。
-
-客户端的人类会话最长 15 分钟，最多每 30 秒复验一次 token，重启后重新登录。机器连接凭据独立于浏览器登录，token 撤销会终止本地登录访问，但不会自动撤销 Fleet。停用 Fleet 使用服务器的连接管理。
+网页使用封闭 `/api/browser/hagency/v1` BFF，页面为 `/hagency/projects` 与
+`/hagency/agents`，不向网页返回原生授权/设备凭据。详见 [Agent 架构](OPERATIONS.zh-CN.md)。
 
 ## 组件配置与首次管理员
 
@@ -169,7 +166,7 @@ Pasion 使用原生 `[database]`、`[account]`、`[email]`、`[[clients]]`、`[[
 
 | 配置项 | 数据库 | 内容 |
 | --- | --- | --- |
-| `hagency.toml` 的 `database_url` | `hagency` | web-admin/Fleet/项目状态和 outbound 队列 |
+| `hagency.toml` 的 `database_url` | `hagency` | 新 Agent 身份/域、AS inbox 和回复 outbox |
 | `palpo.toml` 的 `db.url` | `palpo` | Matrix 用户、房间、事件和 homeserver 状态 |
 | `pasion.toml` 的 `database.uri` | `pasion` | 账号、OAuth/OIDC token 和会话 |
 
@@ -205,11 +202,7 @@ just run --config config/dev/hagency.toml --bootstrap-admin admin \
 其他原生账号及密码不会自动导入；开启委托前应先准备或迁移对应 Pasion 账号。
 原密码文件满足 Pasion 策略时可以复用。执行 bootstrap 前停止开发监听，确保一个数据库只对应一个服务器进程；后续启动省略全部 bootstrap 参数。
 
-可选 `account_config` 接受原 web-admin JSON 字段：`botMxid`、`botToken`、`adminToken`、`approvers`、`passwordKey`、`registrationToken`。
-兼容模式 worker 验证私有邀请制管理员房间、精确审批事件和审批人的当前权限，再创建普通 Matrix 账号。
-待处理密码用 AES-256-GCM 加密，公开 API、审计记录和审批卡片不包含密码或 access token。
-此可选流程需要开启 Palpo 注册并配置对应 registration token。
-`retirement_admin_token_file` 可单独指定 Hagency 最终配额退役操作使用的服务器端凭据文件。
+旧 Fleet/账号审批/退役 token/业务提醒配置会被拒绝。人员注册与账号管理由 Pasion 处理。
 
 ## Compose 部署
 
@@ -250,77 +243,35 @@ bootstrap 拒绝覆盖已有账号，不应在镜像或配置里放置共享默�
 
 ## 保留的业务行为与限制
 
-- Matrix 密码登录；不透明 HttpOnly/SameSite cookie、CSRF、Origin/Host 检查、请求体上限、限流、实时身份/管理员检查及超时。
-- Fleet 授权、验证安装、冲突/漂移检查、仅 owner 可获取的凭据、暂停/恢复/最终撤销和审计。
-- 受管理 Agent 身份创建、受限的资料修改、真实成员关系检查及退役验证，包括 Hagency 最终配额退役。
-- 精确 Matrix probe 回执、绑定 generation 的 outbound 连接证明、项目及私有审批房间、权限检查、绑定来源的申请和真实准入/状态观测。
-- 持久化 outbound 事务、顺序 lane、租约、ACK tombstone、容量限制、凭据轮换、迁移和重放、不可变更新序列、当前快照，以及拒绝过期/未知 readiness。
-- 可选兼容模式账号审批 worker：私有回执、加密待处理密码、认证审批结果、注册恢复和结果通知。
+Palpo/Pasion 原有用户、Room/Space、媒体、举报、Appservice、联邦、服务器操作/
+通知及账号管理保留，仍使用真实组件 API 和授权检查。新功能见 [Agent 架构](OPERATIONS.zh-CN.md)
+与 [能力清单](WEB_ADMIN_PARITY.zh-CN.md)。
 
-PostgreSQL 文档状态和投递队列原子提交。专用连接上的会话级 advisory lock 在连接存续期间限制单写者。
-数据库故障会阻止写入，恢复该连接需要重启进程。
-当前文档存储沿用原单服务器、单写者模式，队列有容量上限，不是集群调度系统。
-
-当前整合 Palpo、Pasion、Padmin 和 Hagency web 管理；以项目为中心的 Rinx 客户端是后续工作。
-旧 SQLite 管理数据不会自动导入；单独验证迁移方案前，这一版本应使用新的 PostgreSQL 管理数据库。
+Fleet/Hafleet、Engagement、资源 allocation 审批、账号审批 Room、旧 enrollment、
+Miniapp aliases 和 authority import 已删除，无旧模式或数据转换。新域/队列使用
+`hagency_agent_v1`。加密 Room 执行等待客户端 crypto，存储密文不代表已执行；
+租约撤销也不能撤回本地已经发生的 tool 副作用。
 
 ## 验证方法
 
-执行下面的 `tests/*.mjs` 脚本需要安装 Node.js；前端构建、本地服务器开发和部署不需要它。
-
 ```sh
 just check-tools
-cargo fmt --check
+just check-agents
+just check-agents-postgres
 cargo check --all-targets --locked
-cargo test --locked
-cargo build --example admin_contract_server --locked
-cargo test --locked -p hagency-frontend --target <native-host-triple>
-node tests/http-contract.mjs
-node tests/native-client-contract.mjs
-# Real client/server enrollment with controlled Pasion/Matrix peers:
-CONTRACT_SERVER=/absolute/path/to/admin_contract_server \
-HAGENCY_CLIENT=/absolute/path/to/hagency \
-CONSOLE_ASSETS=/absolute/path/to/client-console-assets \
-node tests/client-enrollment.e2e.mjs
-# 如果编译产物位于其他目录：
-CONTRACT_SERVER=/absolute/path/to/admin_contract_server node tests/http-contract.mjs
+cargo test --locked -p hagency-server
+cargo clippy --locked -p hagency-server --all-targets -- -D warnings
+cargo check --locked -p hagency-frontend --target wasm32-unknown-unknown
 ```
 
-将 `<native-host-triple>` 替换为 `rustc -vV` 输出的 `host`，例如 `aarch64-apple-darwin`。
-运行 HTTP 契约测试前先构建前端资源。
+PG runner 创建/删除随机独立测试库，不应对现有业务库运行测试迁移。真实 Pasion PKCE、
+Matrix 与新 Agent 投递检查使用 `scripts/test-agent-integration.py`，运行参数见脚本。
+通用 Pasion/Compose 检查保留 `tests/pasion-integration.mjs` 与 `tests/docker-smoke.mjs`，
+需要其专用测试资源/数据库。旧 Fleet contract scripts 与 fixture server 已移除。
 
-HTTP 契约测试会启动 Rust 适配层及受控 Matrix fixture，覆盖 Dioxus SPA/资源和 token 桥接、认证隔离、Fleet/Agent 生命周期、项目准入、outbound proof/ACK/轮换、精确请求绑定、最终配额退役和获批账号创建，不连接模型。
-PostgreSQL 持久化/锁测试必须显式提供专用 `HAGENCY_TEST_DATABASE_URL`：
-
-```sh
-HAGENCY_TEST_DATABASE_URL=postgres://... cargo test --lib postgres_restart -- --ignored
-```
-
-`tests/integration.mjs` 使用专用 Hagency、Palpo 数据库验证真实二进制，包括管理员登录、Matrix 发现、Fleet 注册、真实 relay 投递、重启恢复和签名密钥持久化。
-任一数据库已有应用表时，脚本会拒绝运行。安装 `psql`、创建两个空的专用数据库后运行：
-
-```sh
-HAGENCY_TEST_DATABASE_URL=postgres://.../hagency \
-PALPO_TEST_DATABASE_URL=postgres://.../palpo node tests/integration.mjs
-# 构建镜像并验证隔离部署与重启：
-docker build -t hagency-server:integration-check .
-node tests/docker-smoke.mjs
-```
-
-统一 Pasion 账号与 PKCE 集成测试需要三个**空的**专用数据库和 Pasion 资源：
-
-```sh
-HAGENCY_TEST_DATABASE_URL=postgres://.../hagency_test \
-PALPO_TEST_DATABASE_URL=postgres://.../palpo_test \
-PASION_TEST_DATABASE_URL=postgres://.../pasion_test node tests/pasion-integration.mjs
-```
-
-若服务器二进制不在 `target/debug/`，设置 `HAGENCY_BINARY`；Pasion 资源不在 `resources/pasion/` 时，设置 `PASION_TEST_RESOURCES`。
-这些脚本会写入专用测试数据库，再次运行时使用新的空数据库。
-
-Docker smoke 测试创建唯一 Compose 项目，完成后删除自己创建的容器和卷。
-已执行的检查和限制见[验证记录](VALIDATION.zh-CN.md)。
-Palpo 内嵌改动见[上游 PR #505](https://github.com/palpo-im/palpo/pull/505)。
+BrowserAuth 回归覆盖真实身份/管理员撤销、cookie/CSRF/同源、退出、封闭 BFF 与
+旧路径不可达。完整宿主还需验证旧 API 为 404/410、Palpo/Pasion 通用 API 正常可用。
+历史证据与边界见 [验证记录](VALIDATION.zh-CN.md)。
 
 ### 内嵌 Pasion
 
@@ -381,8 +332,7 @@ type = "blackhole"
 
 生成的配置默认启用 Pasion 委托。宿主自动连接 Palpo 发现、token introspection 和兼容的 Matrix 密码登录。
 `/_pasion/` 是账号中心，`/_pasion/register` 是注册页，`/login` 是整合管理界面的登录入口。
-统一模式下 `/account-request` 重定向到 Pasion 注册，旧的 Hagency 账号审批菜单隐藏。
-人员账号审批应在 Pasion 注册/访问策略中实现；旧审批 worker 保留在显式原生认证模式，不能和委托注册一起使用。
+注册使用 Pasion 自有注册/访问政策。旧 `/account-request`、账号审批 worker 与菜单已删除，无原生认证兼容模式。
 
 Pasion 不实现旧 Matrix SSO 重定向。OAuth 客户端使用挂载的 issuer，旧 Matrix 密码客户端走委托密码登录。
 保留的业务流程和认证改动见[web-admin 功能对照](WEB_ADMIN_PARITY.zh-CN.md)。
@@ -393,44 +343,21 @@ Padmin 源码和 Pasion 依赖仍保留其上游 AGPL 许可；修改项目清�
 
 ### 拆分旧的合并数据库
 
-不会自动重命名数据库、搬迁数据或改写私有配置。
-如果旧部署将 Matrix 和管理表放在同一个 `hagency` 数据库，先停止所有服务器，并备份数据库与持久化密钥/媒体目录。
-以下命令假定原 Compose 部署尚无 `palpo` 数据库，且存在 `public.hagency_admin_state` 表；连接这些数据库的本地原生服务器也必须先停止。
+本版本不迁移旧 Hagency document/Fleet/Engagement 数据。保留 Palpo/Pasion
+数据库 URL、Matrix server identity 与签名密钥/媒体文件；为新的 `hagency_agent_v1`
+配置独立 Hagency 数据库。启动不会重命名、删除或复制现有业务表。
 
-```sh
-docker compose stop server
-umask 077
-mkdir -p backups/db-split
-docker compose exec -T postgres pg_dump -U hagency -Fc hagency > backups/db-split/hagency-before-split.dump
-docker compose exec -T postgres pg_dump -U hagency --no-owner --no-privileges -t public.hagency_admin_state hagency > backups/db-split/admin.sql
-# 任一备份失败时，停止执行后续命令。
-docker compose exec -T postgres psql -U hagency -d postgres -v ON_ERROR_STOP=1 \
-  -c 'ALTER DATABASE hagency RENAME TO palpo;' \
-  -c 'CREATE DATABASE hagency OWNER hagency;'
-docker compose exec -T postgres psql -U hagency -d hagency --single-transaction -v ON_ERROR_STOP=1 < backups/db-split/admin.sql
-```
-
-将 `hagency.toml` 的 `database_url` 指向 `/hagency`，`palpo.toml` 的 `[db].url` 指向 `/palpo`，`pasion.toml` 的 `[database].uri` 指向 `/pasion`。
-保留原 Matrix 服务器名和密钥/媒体目录。此前未启用 Pasion 时，先创建一次对应数据库再启用。
-配置生成器不会覆盖已有文件。
-
-确认管理表恢复成功后，从 `palpo` 删除原管理表，使其只保存 Matrix 数据：
-
-```sh
-docker compose exec -T postgres psql -U hagency -d palpo -v ON_ERROR_STOP=1 -c 'DROP TABLE public.hagency_admin_state;'
-```
-
-之后以更新后的配置和镜像重启。
-数据库重命名和管理表复制保留 Matrix 账号、Fleet 和队列状态，Pasion 数据保留在自身数据库。
+此前合并数据库的部署须先独立审查备份与组件分离方案；复制 `hagency_admin_state`
+到新服务不是支持的迁移方法。
 
 ### 将旧的单一配置拆成组件配置
 
 已有三个独立数据库的部署，在拆分配置时保留数据库 URL、服务器身份、密钥/媒体路径及认证设置：
 
-1. 把宿主设置放进 `hagency.toml`，用 `palpo_config` 和可选 `pasion_config` 文件引用替代内联组件段。
+1. 把宿主设置放进 `hagency.toml`，用 `palpo_config` 和必需的 `pasion_config` 文件引用替代内联组件段。
 2. 将 `[matrix]` 内容移到 `palpo.toml` 顶层，去除子段的 `matrix.` 前缀，例如 `[matrix.db]` 改为 `[db]`。
 3. 将 `[pasion].database_url` 改为 `pasion.toml` 中的 `[database].uri`；`resources_dir`、`delegate_matrix_auth` 移入 `[hagency]`；展开 `[pasion.settings.*]` 到对应原生段。
 4. 按新文件位置调整相对路径，或继续使用绝对路径；通过 `hagency-server --config <path>/hagency.toml --check-config` 检查。
 
 旧的私有 `config.dev.toml`、`config.docker.toml` 不会自动改写或导入，迁移期间应保留。
-如果数据库仍合并，先完成上面的数据库拆分，再启用新配置。
+如果数据库仍合并，先独立审查组件分离方案，再启用新配置。

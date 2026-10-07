@@ -4,6 +4,14 @@
 
 在一个 Rust 服务器中运行 Palpo Matrix、Pasion 认证和 Padmin/Hagency 管理界面。
 
+集成 Agent Appservice 是必装组件。用户使用自己的 Matrix 账号通过 Pasion 登录，
+永久拥有自己创建的 Agent。Project 对应一个 Space，子 Room 保留独立成员关系。
+服务器管理创建权与消息投递，本地 hagency-client 执行 Codex 并控制资源/工具策略。
+网页入口为 `/hagency/projects` 与 `/hagency/agents`。
+
+Fleet/Hafleet、Engagement/allocation 审批与 authority import 已删除，无旧数据导入
+或兼容模式。Palpo/Pasion 通用管理仍使用原有组件 API。
+
 ## 本地开发
 
 安装 Rust ≥ 1.99、[just](https://github.com/casey/just)、Docker、Git、curl

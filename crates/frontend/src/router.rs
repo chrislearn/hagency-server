@@ -11,9 +11,6 @@ pub enum Route {
     #[route("/login")]
     LoginPage {},
 
-    #[route("/account-request")]
-    AccountRequest {},
-
     #[route("/oauth/callback?:code&:state&:error&:error_description")]
     OAuthCallback {
         code: Option<String>,
@@ -26,28 +23,10 @@ pub enum Route {
         #[route("/")]
         Dashboard {},
 
-        #[route("/hagency/inbox")]
-        HagencyInbox {},
         #[route("/hagency/projects")]
         HagencyProjects {},
-        #[route("/hagency/request-agent")]
-        HagencyRequestAgent {},
-        #[route("/hagency/requests")]
-        HagencyRequests {},
-        #[route("/hagency/fleets")]
-        HagencyFleets {},
-        #[route("/hagency/hafleets")]
-        HagencyFleetNameLegacy {},
-        #[route("/hagency/my-hagencys")]
-        HagencyFleetsLegacy {},
-        #[route("/hagency/connections")]
-        HagencyConnections {},
-        #[route("/hagency/connections/:fleet_id/agents")]
-        HagencyAgents { fleet_id: String },
-        #[route("/hagency/account-approvals")]
-        HagencyAccountApprovals {},
-        #[route("/hagency/activity")]
-        HagencyActivity {},
+        #[route("/hagency/agents")]
+        HagencyAgents {},
 
         #[route("/users")]
         UserList {},
@@ -175,13 +154,6 @@ fn AuthenticatedLayout() -> Element {
     let nav = use_navigator();
     let route = use_route::<Route>();
 
-    if !auth::is_authenticated() {
-        nav.replace(Route::LoginPage {});
-        return rsx! {
-            div { "Redirecting..." }
-        };
-    }
-
     // Re-check periodically too: a revoked admin who only uses pages that
     // keep answering (or sits idle) must not keep the dashboard open.
     use_future(|| async {
@@ -193,22 +165,45 @@ fn AuthenticatedLayout() -> Element {
         }
     });
 
-    let mut probe = use_resource(move || async move {
-        // Already decided this session — don't re-probe on navigation.
-        if ADMIN_VERDICT.peek().is_some() {
-            return;
-        }
-        *ADMIN_PROBE_ERROR.write() = None;
-        match auth::verify_admin().await {
-            Ok(flag) => set_admin_verdict(flag),
-            // Never fall back to "admin": without a positive answer from the
-            // servers the dashboard stays closed.
-            Err(err) => *ADMIN_PROBE_ERROR.write() = Some(err.message),
+    let router = dioxus::prelude::router();
+    let mut probe = use_resource(move || {
+        let route = router.current::<Route>();
+        async move {
+            // A reload retains only the HttpOnly session, never an OAuth bearer.
+            // Revalidate that session before rendering owner management pages.
+            *ADMIN_PROBE_ERROR.write() = None;
+            match auth::verify_admin().await {
+                Ok(flag) => {
+                    set_admin_verdict(flag);
+                    if flag
+                        && !auth::has_oauth_token()
+                        && !matches!(route, Route::HagencyProjects {} | Route::HagencyAgents {})
+                        && let Err(err) = auth::start_login().await
+                    {
+                        *ADMIN_PROBE_ERROR.write() = Some(err.message);
+                    }
+                }
+                Err(err) if err.status == 401 => {
+                    crate::api::browser_auth::clear_session();
+                    nav.replace(Route::LoginPage {});
+                }
+                // Never fall back to "admin": without a positive answer from the
+                // servers the dashboard stays closed.
+                Err(err) => *ADMIN_PROBE_ERROR.write() = Some(err.message),
+            }
         }
     });
 
     let verdict = *ADMIN_VERDICT.read();
     let probe_error = ADMIN_PROBE_ERROR.read().clone();
+    let member_page = matches!(route, Route::HagencyProjects {} | Route::HagencyAgents {});
+    if verdict == Some(true) && !member_page && !auth::has_oauth_token() {
+        return rsx! { div { class: "p-6", "Restoring Pasion authorization..."
+            if let Some(message) = probe_error { p { role: "alert", "{message}" }
+                button { onclick: move |_| probe.restart(), "Retry" }
+            }
+        } };
+    }
     match (verdict, probe_error) {
         (Some(true), _) => rsx! {
             AppLayout {
@@ -216,16 +211,7 @@ fn AuthenticatedLayout() -> Element {
             }
         },
         (Some(false), _) => {
-            let member_page = matches!(
-                route,
-                Route::HagencyInbox {}
-                    | Route::HagencyProjects {}
-                    | Route::HagencyRequestAgent {}
-                    | Route::HagencyRequests {}
-                    | Route::HagencyFleets {}
-                    | Route::HagencyFleetsLegacy {}
-                    | Route::HagencyFleetNameLegacy {}
-            );
+            let member_page = matches!(route, Route::HagencyProjects {} | Route::HagencyAgents {});
             if matches!(route, Route::Dashboard {}) {
                 nav.replace(Route::HagencyProjects {});
             }
@@ -273,50 +259,12 @@ fn LoginPage() -> Element {
 }
 
 #[component]
-fn AccountRequest() -> Element {
-    rsx! { pages::hagency::accounts::AccountRequest {} }
-}
-#[component]
 fn HagencyProjects() -> Element {
     rsx! { pages::hagency::projects::Projects {} }
 }
 #[component]
-fn HagencyRequestAgent() -> Element {
-    rsx! { pages::hagency::requests::RequestAgent {} }
-}
-#[component]
-fn HagencyRequests() -> Element {
-    rsx! { pages::hagency::requests::Requests {} }
-}
-#[component]
-fn HagencyFleets() -> Element {
-    rsx! { pages::hagency::connections::MyFleets {} }
-}
-#[component]
-fn HagencyFleetNameLegacy() -> Element {
-    use_navigator().replace(Route::HagencyFleets {});
-    rsx! { div { "Opening My Fleets…" } }
-}
-#[component]
-fn HagencyFleetsLegacy() -> Element {
-    use_navigator().replace(Route::HagencyFleets {});
-    rsx! { div { "Opening My Fleets…" } }
-}
-#[component]
-fn HagencyConnections() -> Element {
-    rsx! { pages::hagency::connections::Connections {} }
-}
-#[component]
-fn HagencyAgents(fleet_id: String) -> Element {
-    rsx! { pages::hagency::connections::Agents { fleet_id } }
-}
-#[component]
-fn HagencyAccountApprovals() -> Element {
-    rsx! { pages::hagency::accounts::Approvals {} }
-}
-#[component]
-fn HagencyActivity() -> Element {
-    rsx! { pages::hagency::connections::Activity {} }
+fn HagencyAgents() -> Element {
+    rsx! { pages::hagency::agents::Agents {} }
 }
 
 #[component]
@@ -555,9 +503,4 @@ fn NotFound(route: Vec<String>) -> Element {
             }
         }
     }
-}
-
-#[component]
-fn HagencyInbox() -> Element {
-    rsx! { pages::hagency::inbox::Inbox {} }
 }

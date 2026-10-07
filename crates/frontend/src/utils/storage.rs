@@ -46,11 +46,7 @@ pub fn remove_item(key: &str) {
 }
 
 pub fn clear() {
-    let receipt = LocalStorage::get::<String>("hagency.account_request_receipt").ok();
     LocalStorage::clear();
-    if let Some(receipt) = receipt {
-        let _ = LocalStorage::set("hagency.account_request_receipt", receipt);
-    }
     SessionStorage::clear();
     SESSION_SECRETS.with(|values| values.borrow_mut().clear());
 }

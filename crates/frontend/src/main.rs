@@ -35,14 +35,6 @@ fn main() {
             "pasion_enabled",
             if cfg.pasion_enabled { "true" } else { "false" },
         );
-        utils::storage::set_item(
-            "legacy_account_approval_enabled",
-            if cfg.legacy_account_approval_enabled {
-                "true"
-            } else {
-                "false"
-            },
-        );
         if !cfg.palpo_admin_url.trim().is_empty() {
             utils::storage::set_item("palpo_admin_url", cfg.palpo_admin_url.trim());
         } else {

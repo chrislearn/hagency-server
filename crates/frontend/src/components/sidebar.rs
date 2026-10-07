@@ -124,61 +124,22 @@ fn build_sections(
     let mut sections: Vec<NavSection> = Vec::new();
 
     sections.push(NavSection {
-        label: "Hagency services".into(),
+        label: "Hagency".into(),
         items: vec![
-            NavItem {
-                title: "Inbox".into(),
-                route: Route::HagencyInbox {},
-                icon: "scroll-text",
-            },
             NavItem {
                 title: "Projects".into(),
                 route: Route::HagencyProjects {},
                 icon: "layers",
             },
             NavItem {
-                title: "Request an agent".into(),
-                route: Route::HagencyRequestAgent {},
+                title: "My agents".into(),
+                route: Route::HagencyAgents {},
                 icon: "code",
-            },
-            NavItem {
-                title: "Agent requests".into(),
-                route: Route::HagencyRequests {},
-                icon: "scroll-text",
-            },
-            NavItem {
-                title: "My Fleets".into(),
-                route: Route::HagencyFleets {},
-                icon: "server",
             },
         ],
     });
     if !is_admin {
         return sections;
-    }
-    sections.push(NavSection {
-        label: "Hagency administration".into(),
-        items: vec![
-            NavItem {
-                title: "Fleet connections".into(),
-                route: Route::HagencyConnections {},
-                icon: "link",
-            },
-            NavItem {
-                title: "Hagency activity".into(),
-                route: Route::HagencyActivity {},
-                icon: "scroll-text",
-            },
-        ],
-    });
-
-    if crate::utils::storage::get_item("legacy_account_approval_enabled").as_deref() == Some("true")
-    {
-        sections.last_mut().unwrap().items.push(NavItem {
-            title: "Account approvals".into(),
-            route: Route::HagencyAccountApprovals {},
-            icon: "user-check",
-        });
     }
 
     // Dashboard (standalone)

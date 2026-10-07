@@ -2,6 +2,29 @@
 
 [English](VALIDATION.md) · [文档目录](README.zh-CN.md)
 
+下方 Fleet/Engagement/allocation 证据属于已经删除的历史实现，不代表当前 Agent
+版本兼容旧结构。当前行为以 [Agent 架构](OPERATIONS.zh-CN.md) 与配置指南为准。
+
+2026-10-07 新网页登录/切除边界已实际执行：
+
+- `cargo test -p hagency-server --offline --lib browser_auth::tests`：两项通过。
+  受控 HTTP 验证真实身份/管理员撤销、cookie/CSRF/同源、退出、封闭 BFF、旧路径未挂载。
+- `cargo clippy -p hagency-server --offline --all-targets -- -D warnings`：删除旧
+  Fleet contract-server example 后通过。
+- `cargo check -p hagency-frontend --target wasm32-unknown-unknown --offline`：通过，
+  保留原通用前端的 51 条 dead-code warnings。
+
+这些检查不代表浏览器视觉验收或完整宿主 PKCE/Matrix 投递已通过，后者需单独补充
+实际集成 smoke 结果。PostgreSQL runner 的执行证据另行记录。
+
+
+2026-10-07 追加真实集成证据：
+
+- 当前隔离 PostgreSQL runner 的 39 项测试通过，包括私密 Room 发现/名单权限隔离，以及生产 Appservice 启动门禁。已认证的 create/bind 真实 HTTP 路由在未就绪时返回 503，Agent/binding/command/audit 记录不变，Matrix/Gateway 调用为零。真实启动 worker 完成 Matrix 发送后仍未就绪，只有认证 AS 事件持久化后才放行，同一路由随后返回 202。新增执行历史 129 条两页、其他 owner 隔离、永久见证与真实 HTTP mandatory historySnapshot、旧设备 start/Acquire 原子竞态：缺失或改变快照不能产生新 lease/epoch。该测试另建随机隔离数据库并清理；最终严格 all-target Clippy 通过。服务器只提供执行元数据，客户端仍负责完整账本与费用核验。
+- `HAGENCY_TEST_BACKUP_RESTORE=1 python3 scripts/test-agent-integration.py` 通过，覆盖真实 native Pasion PKCE、傀儡加入、消息及稳定回复、Room 发现、退役和[同机三数据库恢复](BACKUP_RESTORE_VALIDATION.zh-CN.md)。
+- `HAGENCY_TEST_HOLD_CLIENT=1` 与客户端真实 OwnerHost 测试配合通过：用户登录、Space/Room 创建及关联/adopt、Room 发现、Agent 创建并等待实际加入、名单、退出撤权。未调用模型；临时库清理完成。
+- 用户/设备及 Appservice OpenAPI 3.1 的 46/4 个实际操作通过路由与 DTO 校验，8 个负例通过；新增 owner/device 执行历史分页与 lease 的必填历史快照。
+
 这是早期实现的按时间记录。当前行为以最后的统一 Pasion 章节和[配置指南](guide.zh-CN.md)为准；
 前面关于可选委托认证、旧前端的说明已被后续章节取代。本次文档整理不会重新执行这些历史检查。
 
@@ -237,3 +260,22 @@ Palpo 清理在独立分支提交为草稿 [PR #512](https://github.com/palpo-im
 - 受控浏览器 fixture 确认 `/hagency/fleets` 显示 **My Fleets**，侧栏显示
   **Fleet connections**，并保留 Matrix/Padmin 导航。
 - 既有 ID、注册、token、协议字段与审计历史保留，无需数据库迁移。
+
+2026-10-07 新 PostgreSQL 域/投递恢复回归：
+
+- `python3 scripts/test-agent-service-postgres.py`：22 项通过，无失败或 ignored；
+  runner 创建并删除专用随机测试库。
+- 包含接管后的已知结果显式恢复、原 execution identity 不可改、unknown 执行保持、
+  稳定回复 txn/payload、确定未发送取消的重授权、不明网络结果保留、活跃 worker 拒绝、
+  永久投递拒绝及 binding 撤销。
+- 包含 owner 退出后已提交 provisioning 的可信收敛与 terminal late-join scope sweep。
+  数据库测试本身不模拟 Matrix 网络故障，也不证明真实部署物理清除了 late membership。
+- 新模块 `cargo clippy -p hagency-agent-service --offline --all-targets -- -D warnings` 通过。
+
+## 一致停机三库恢复（2026-10-07）
+
+`HAGENCY_TEST_NATIVE_PKCE=1 HAGENCY_TEST_BACKUP_RESTORE=1 python3 scripts/test-agent-integration.py` 在真实嵌入后端通过；全部源/恢复随机库及成功私有文件已清理。[完整证据与边界](BACKUP_RESTORE_VALIDATION.zh-CN.md)记录永久身份/摘要/已发送回复、新原生授权、显式租约接管、未完成执行封为 unknown、新请求往返和迟到入 Room 退役收敛；未调用模型。
+
+## 独立私有文件系统恢复扩展（2026-10-07）
+
+同一恢复开关在全新私有目录通过，重启前原目录移为 offline、旧路径不可达。完整 data/media/config、AS/Matrix/Pasion 密钥及配置 pepper 字节一致，真实 Matrix 媒体上传/下载、新原生登录和设备授权、原回复及 unknown 执行、新请求往返和 kick/power/退役回归均通过。[具体复制路径与整机灾备边界](BACKUP_RESTORE_VALIDATION.zh-CN.md)已记录。

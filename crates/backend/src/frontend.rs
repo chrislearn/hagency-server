@@ -28,7 +28,6 @@ impl Frontend {
                 "server_name": conf.matrix.server_name,
                 "pasion_enabled": pasion.is_some(),
                 "oauth_enabled": pasion.is_some_and(|p| p.delegate_matrix_auth),
-                "legacy_account_approval_enabled": conf.account_config.is_some() && !pasion.is_some_and(|p| p.delegate_matrix_auth),
                 "pasion_public_url": if pasion.is_some() {
                     conf.public_origin.join(MOUNT).unwrap().to_string()
                 } else { String::new() },
@@ -47,7 +46,6 @@ impl Frontend {
             "favicon.ico",
             "login",
             "oauth/callback",
-            "account-request",
             "users/{**path}",
             "rooms/{**path}",
             "media",

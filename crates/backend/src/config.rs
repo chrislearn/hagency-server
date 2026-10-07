@@ -18,46 +18,14 @@ pub struct HostConfig {
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
     #[serde(default)]
-    pub callback_origins: Vec<Url>,
-    #[serde(default)]
     pub session_ttl_ms: Option<u64>,
     #[serde(default)]
     pub read_timeout_ms: Option<u64>,
     #[serde(default)]
     pub queue: QueueConfig,
-    #[serde(default, alias = "hafleet_access")]
-    pub fleet_access: FleetAccessConfig,
-    #[serde(default)]
-    pub account_config: Option<PathBuf>,
-    #[serde(default)]
-    pub retirement_admin_token_file: Option<PathBuf>,
     #[serde(default)]
     pub pasion_config: Option<PathBuf>,
     pub palpo_config: PathBuf,
-    #[serde(default)]
-    pub action_notifications: Option<ActionNotificationsConfig>,
-}
-/// Server policy for ordinary users enrolling their own local clients.
-#[derive(Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct FleetAccessConfig {
-    pub allow_self_service: bool,
-    pub max_per_user: usize,
-}
-impl Default for FleetAccessConfig {
-    fn default() -> Self {
-        Self {
-            allow_self_service: false,
-            max_per_user: 3,
-        }
-    }
-}
-/// An ordinary Pasion/Matrix account sends minimal private action notices.
-#[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ActionNotificationsConfig {
-    pub bot_mxid: String,
-    pub token_file: PathBuf,
 }
 /// Fully loaded runtime configuration; files stay owned by their components.
 #[derive(Clone)]
@@ -84,6 +52,8 @@ pub struct QueueConfig {
     pub max_records: usize,
     pub max_bytes: usize,
     pub lease_ms: i64,
+    /// Maximum age of an unstarted Agent request, from trusted receipt time.
+    pub event_ttl_ms: i64,
 }
 impl Default for QueueConfig {
     fn default() -> Self {
@@ -92,6 +62,7 @@ impl Default for QueueConfig {
             max_records: 10000,
             max_bytes: 16 * 1024 * 1024,
             lease_ms: 30000,
+            event_ttl_ms: 86_400_000,
         }
     }
 }
@@ -114,19 +85,11 @@ impl Config {
         let path = path.as_ref().canonicalize()?;
         let mut host = read_host(&path)?;
         let base = path.parent().unwrap();
-        for p in [
-            &mut host.public_dir,
-            &mut host.account_config,
-            &mut host.retirement_admin_token_file,
-            &mut host.pasion_config,
-        ]
-        .into_iter()
-        .flatten()
+        for p in [&mut host.public_dir, &mut host.pasion_config]
+            .into_iter()
+            .flatten()
         {
             *p = resolve(base, p);
-        }
-        if let Some(notifications) = &mut host.action_notifications {
-            notifications.token_file = resolve(base, &notifications.token_file);
         }
         host.data_dir = resolve(base, &host.data_dir);
         host.palpo_config = resolve(base, &host.palpo_config)
@@ -213,18 +176,15 @@ impl Config {
     pub fn validate(&self) -> anyhow::Result<()> {
         origin(&self.public_origin, true)?;
         anyhow::ensure!(
-            self.fleet_access.max_per_user > 0,
-            "fleet_access.max_per_user must be positive"
-        );
-        for url in &self.callback_origins {
-            origin(url, false)?;
-        }
-        anyhow::ensure!(
             self.queue.max_pending > 0
                 && self.queue.max_records > 0
                 && self.queue.max_bytes > 0
                 && self.queue.lease_ms > 0,
             "queue limits must be positive"
+        );
+        anyhow::ensure!(
+            (1_000..=2_592_000_000).contains(&self.queue.event_ttl_ms),
+            "queue event_ttl_ms must be between one second and thirty days"
         );
         anyhow::ensure!(
             self.session_ttl_ms.unwrap_or(1800000) > 0 && self.read_timeout_ms.unwrap_or(8000) > 0,
@@ -239,18 +199,6 @@ impl Config {
             !self.matrix.admin.console_automatic,
             "embedded Palpo does not support an automatic interactive console"
         );
-        if let Some(n) = &self.action_notifications {
-            let bot: hagency_contract::MatrixUserId = n.bot_mxid.clone().try_into()?;
-            let server = self.matrix.server_name.to_string().try_into()?;
-            anyhow::ensure!(
-                bot.belongs_to(&server),
-                "notification account must belong to this Matrix server"
-            );
-            anyhow::ensure!(
-                n.token_file.is_file(),
-                "notification token_file must be an existing file"
-            );
-        }
         let admin_db = postgres_database(&self.database_url, "database_url")?;
         let matrix_db = postgres_database(&self.matrix.db.url, "matrix.db.url")?;
         anyhow::ensure!(
