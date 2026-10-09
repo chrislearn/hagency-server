@@ -343,6 +343,11 @@ fn copy_to_clipboard(text: &str, label: &str) {
 /// Build a wire registration from the form, validating required fields and the
 /// namespaces JSON. Shared by both the create and the edit paths.
 fn form_to_registration(f: &ConfigForm) -> Result<AppserviceRegistration, String> {
+    if f.id.trim() == "hagency_agents_v1" {
+        return Err(
+            "The built-in Agent Appservice is managed by the deployment configuration.".into(),
+        );
+    }
     if f.id.trim().is_empty()
         || f.sender_localpart.trim().is_empty()
         || f.as_token.trim().is_empty()
@@ -588,7 +593,7 @@ pub fn AppserviceList() -> Element {
         div { class: "space-y-8",
             PageHeader {
                 title: "Appservices".to_string(),
-                description: "Install and manage Matrix application services at runtime.".to_string(),
+                description: "Manage external Matrix bridges. Hagency’s built-in Agent Appservice is managed by the deployment configuration; Agents share it across the server.".to_string(),
                 Button {
                     variant: ButtonVariant::Outline,
                     onclick: move |_| data.restart(),
@@ -785,6 +790,7 @@ fn AppserviceTable(
                                 let sender = item.sender_localpart.clone();
                                 let url = item.url.clone().unwrap_or_else(|| "-".to_string());
                                 let disabled = item.disabled;
+                                let managed = id == "hagency_agents_v1";
                                 let busy = toggling.read().as_deref() == Some(id.as_str());
                                 let is_open = expanded.read().as_deref() == Some(id.as_str());
                                 rsx! {
@@ -801,6 +807,7 @@ fn AppserviceTable(
                                         }
                                         TableCell {
                                             code { class: "text-sm font-mono", "{id}" }
+                                            if managed {Badge {variant:BadgeVariant::Secondary,"Built in"}}
                                         }
                                         TableCell { "{sender}" }
                                         TableCell {
@@ -814,10 +821,11 @@ fn AppserviceTable(
                                             }
                                         }
                                         TableCell { class: "text-right".to_string(),
+                                            if managed {span {class:"text-xs text-muted-foreground","Deployment managed"}} else {
                                             Button {
                                                 variant: ButtonVariant::Ghost,
                                                 size: ButtonSize::Sm,
-                                                disabled: busy,
+                                                disabled: busy || managed,
                                                 onclick: move |_| on_toggle.call((id_toggle.clone(), disabled)),
                                                 if disabled { "Enable" } else { "Disable" }
                                             }
@@ -825,8 +833,10 @@ fn AppserviceTable(
                                                 variant: ButtonVariant::Ghost,
                                                 size: ButtonSize::Sm,
                                                 class: "text-destructive hover:text-destructive".to_string(),
+                                                disabled: managed,
                                                 onclick: move |_| on_delete.call(id_delete.clone()),
                                                 "Delete"
+                                            }
                                             }
                                         }
                                     }
@@ -880,13 +890,14 @@ fn AppserviceDetail(id: String, on_edit: EventHandler<AppserviceRegistration>) -
                             div { class: "flex flex-wrap items-center justify-between gap-2",
                                 h4 { class: "text-sm font-semibold", "Registration" }
                                 div { class: "flex gap-2",
-                                    Button {
+                                    if reg.id != "hagency_agents_v1" { Button {
                                         variant: ButtonVariant::Outline,
                                         size: ButtonSize::Sm,
+                                        disabled: reg.id == "hagency_agents_v1",
                                         onclick: move |_| on_edit.call(reg_edit.clone()),
                                         Icon { name: "edit".to_string(), class: "mr-2 h-3.5 w-3.5".to_string() }
                                         "Edit"
-                                    }
+                                    }}
                                     Button {
                                         variant: ButtonVariant::Outline,
                                         size: ButtonSize::Sm,

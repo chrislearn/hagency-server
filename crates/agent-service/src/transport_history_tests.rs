@@ -171,17 +171,14 @@ async fn postgres_started_history_pages_are_permanent_owner_scoped_and_body_free
         .unwrap();
     let instance = f
         .domain
-        .execution_instance(&f.p, &f.agent, crate::api::now_ms())
+        .agent(&f.p, &f.agent, crate::api::now_ms())
         .await
-        .unwrap()
         .unwrap();
     f.domain
-        .set_execution_instance(
-            &f.p,
+        .set_execution_device(
+            &f.second,
             &f.agent,
-            crate::domain::SetExecutionInstance {
-                device_id: f.second.device_id.clone().unwrap(),
-                name: "History replacement".into(),
+            crate::domain::SetExecutionDevice {
                 expected_generation: instance.generation,
             },
             crate::api::now_ms(),
@@ -274,7 +271,7 @@ async fn postgres_history_acquire_and_old_execution_start_are_atomic() {
         "a started execution cannot be omitted by a successful takeover witness"
     );
     match (start, takeover) {
-        (Ok(_), Err(Error::Unauthorized("execution_instance_device_required"))) => {
+        (Ok(_), Err(Error::Unauthorized("execution_device_required"))) => {
             f.transport
                 .renew_lease(&f.p, &old, 60000, now)
                 .await

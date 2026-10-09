@@ -237,6 +237,11 @@ fn base64url_encode(data: &[u8]) -> Result<String, HttpError> {
 /// One entry point: ask Pasion for the current browser account's role. A new
 /// browser first logs in as a member; the callback upgrades a verified admin.
 pub async fn start_login() -> Result<(), HttpError> {
+    if let Some(path) = web_sys::window().and_then(|w| w.location().pathname().ok())
+        && crate::router::restorable_route(&path, true).is_some()
+    {
+        storage::set_session_item("oauth_return_route", &path);
+    }
     let viewer = pasion_viewer().await?;
     start_oauth_login(viewer["viewer"]["can_request_admin"] == true).await
 }

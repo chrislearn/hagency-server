@@ -85,3 +85,52 @@ transaction and content. Unknown-send recovery retains this original reply shape
 a trusted flat-send observation uses the persisted Room context as its root.
 
 New server-allocated entity IDs use lowercase monotonic ULIDs with type prefixes. Dispatch and reply entity IDs follow `evt_<ulid>` and `rep_<ulid>`; Matrix IDs, payload digests and immutable Matrix transaction IDs retain their existing semantics. Session/device bearer tokens and worker claims continue to use independent 256-bit random values. Within-process ID order is not a distributed execution or commit order.
+
+## Agent execution device (domain schema 3 / discovery protocol 3)
+
+An Agent has one nullable `executionDeviceId`; each device may execute several
+Agents. New identity creation requires an authenticated device bearer and assigns
+that current device automatically. No caller-specified device, instance ID or
+instance name is accepted. `PUT /agents/{id}/execution-device` accepts only
+`{expectedGeneration}` and uses the same current device proof. Agent generation
+is its CAS version. Same-device saves leave generation and lease unchanged;
+different-device saves increment generation, expire the lease, preserve running
+executions as unknown and cancel definitely unsent pending replies. Unknown or
+already issued sends retain their original transaction and historical evidence.
+All starts, tools, completions, reconciliations and reply-worker claims check the
+assigned device/current lease. A request already issued to Matrix cannot be undone.
+
+Version 2 deployments are rejected at startup; there is no automatic compatibility
+handler or migration. A separately approved, offline local maintenance conversion
+is documented in `../execution-device-cutover.sql`; production restore procedures
+must back up all databases and private keys before changing a deployed schema.
+
+## Processing-start reactions
+
+`POST /api/hagency/v1/execution/events/processing` uses a device bearer and strict
+`{lease,dispatchId,executionId}` (the Start DTO), returning
+`{processing:{id,dispatchId,executionId,state,matrixEventId}}`. Call only after the
+provider accepted the actual model turn. Enqueue requires an exact running
+execution, the currently assigned device, its original live lease, unchanged
+binding generation, and fresh Matrix owner/requester/puppet authority.
+
+The independent `processing_outbox` permanently fixes a single `m.reaction`
+`m.annotation` with key 👀 to the dispatch's original Matrix event, never its
+logical thread context. No caller room/event/key/content is accepted. It uses
+one deterministic transaction ID per dispatch. Same-attempt retries are durable;
+an already completed attempt may return an existing receipt but cannot enqueue
+one. A short completed turn may deliver its already queued start notification
+while the original lease and permissions remain valid. Unknown/cancelled
+executions cannot deliver. Lost device/lease/scope cannot authorize a new send.
+
+Unknown network effects preserve original content/transaction for idempotent
+retry under the same current authority; permission denial permanently blocks
+retry. A previously issued network effect cannot be undone; its exact worker may
+record the historical outcome after authority loss. Model/tool work is never
+repeated to produce this notification, and reply outbox semantics are unchanged.
+
+Schema 4 strictly rejects earlier domain versions. The standalone offline
+`../processing-reaction-cutover.sql` creates only the new processing table,
+indexes, guards/view and advances the exact version-3 marker in one transaction.
+It never resets identities, execution devices, generations, leases or messages.
+Do not run it against a live deployment; first stop its sole server and back up.

@@ -37,7 +37,6 @@ pub fn AuthStatusPage() -> Element {
         .and_then(|w| w.location().origin().ok())
         .unwrap_or_else(|| "same origin".to_string());
     let base_url_for_flows = base_url.clone();
-    let base_url_for_version = base_url.clone();
     let base_url_for_issuer = base_url.clone();
 
     let login_flows = use_resource(move || {
@@ -45,14 +44,7 @@ pub fn AuthStatusPage() -> Element {
         async move { auth::get_login_flows(&url).await.map_err(|e| e.message) }
     });
 
-    let server_version = use_resource(move || {
-        let url = base_url_for_version.clone();
-        async move {
-            server_info::get_server_version_unauthenticated(&url)
-                .await
-                .ok()
-        }
-    });
+    let server_version = use_resource(|| async { server_info::get_server_version().await.ok() });
 
     // Delegated auth issuer + OIDC discovery
     let issuer_data = use_resource(move || {
@@ -250,22 +242,24 @@ pub fn AuthStatusPage() -> Element {
                             {t("auth_status.auth_capabilities")}
                         }
                     }
-                    CardDescription { {t("auth_status.auth_capabilities_desc")} }
+                    CardDescription { "Pasion discovery and the homeserver’s advertised Matrix login flows." }
                 }
                 CardContent {
                     match &*login_flows.read() {
                         Some(Ok(flows)) => {
-                            let has_password = flows.iter().any(|f| f.flow_type == "m.login.password");
+                            let delegated = crate::utils::storage::get_item("oauth_enabled").as_deref() == Some("true");
+                            let has_password = !delegated && flows.iter().any(|f| f.flow_type == "m.login.password");
                             let has_sso = flows.iter().any(|f| f.flow_type.contains("sso"));
                             let has_token = flows.iter().any(|f| f.flow_type == "m.login.token");
-                            let has_oidc = flows.iter().any(|f| f.flow_type.contains("oidc") || f.flow_type.contains("jwt"));
+                            let discovery_checks = issuer_data().flatten();
+                            let has_oidc = discovery_checks.as_ref().is_some_and(|checks| checks.iter().any(|c| c.label == "OIDC Discovery" && c.status == DiagnosticStatus::Pass));
 
                             rsx! {
                                 div { class: "space-y-6",
                                     // Capability summary
                                     div { class: "grid gap-4 md:grid-cols-2 lg:grid-cols-4",
                                         CapabilityCard {
-                                            label: "Password Login".to_string(),
+                                            label: "Personal Matrix password login".to_string(),
                                             enabled: has_password,
                                             icon: "key",
                                         }
@@ -283,6 +277,7 @@ pub fn AuthStatusPage() -> Element {
                                             label: "OIDC / Delegated Auth".to_string(),
                                             enabled: has_oidc,
                                             icon: "shield",
+                                            loading: issuer_data().is_none(),
                                         }
                                     }
 
@@ -313,7 +308,10 @@ pub fn AuthStatusPage() -> Element {
                                     }
 
                                     // Warnings / hints
-                                    if !has_password {
+                                    if delegated {
+                                        p {class:"text-sm text-muted-foreground", "Personal accounts sign in through Pasion. Matrix login flows below describe advertised protocol endpoints, including Appservice access; they do not enable native password login for people."}
+                                    }
+                                    if !has_password && !delegated {
                                         div { class: "rounded-md bg-yellow-500/10 border border-yellow-500/20 p-3",
                                             p { class: "text-sm text-yellow-600 dark:text-yellow-400",
                                                 Icon { name: "alert-triangle".to_string(), class: "h-4 w-4 inline mr-1".to_string() }
@@ -656,7 +654,12 @@ fn PasionDiagnosticsPanel(base_url: String) -> Element {
 }
 
 #[component]
-fn CapabilityCard(label: String, enabled: bool, icon: &'static str) -> Element {
+fn CapabilityCard(
+    label: String,
+    enabled: bool,
+    icon: &'static str,
+    #[props(default)] loading: bool,
+) -> Element {
     rsx! {
         div { class: "rounded-md border p-4 text-center",
             Icon {
@@ -668,7 +671,9 @@ fn CapabilityCard(label: String, enabled: bool, icon: &'static str) -> Element {
                 },
             }
             p { class: "text-sm font-medium", "{label}" }
-            if enabled {
+            if loading {
+                Badge { variant: BadgeVariant::Outline, "Checking…" }
+            } else if enabled {
                 Badge { variant: BadgeVariant::Success, "Available" }
             } else {
                 Badge { variant: BadgeVariant::Outline, "Not Available" }

@@ -1,6 +1,7 @@
 use super::common::*;
 use dioxus::prelude::*;
 use serde_json::{Value, json};
+
 #[component]
 pub fn Projects() -> Element {
     let mut projects = use_resource(|| async {
@@ -13,62 +14,65 @@ pub fn Projects() -> Element {
     let mut space = use_signal(String::new);
     let mut project_id = use_signal(String::new);
     let mut room = use_signal(String::new);
-    let mut revision = use_signal(|| String::from("1"));
-    let mut default_allow = use_signal(|| true);
-    let mut allow = use_signal(String::new);
-    let mut deny = use_signal(String::new);
+    let mut new_room = use_signal(String::new);
     let data = projects().and_then(Result::ok).unwrap_or(Value::Null);
-    rsx! {div{class:"hg-page hg-stack",
-        h1{class:"text-2xl font-bold","Projects"}
-        p{"Each project maps to one Matrix Space. Rooms have independent membership. Space or Room administrators can register existing groups and manage Room access rights below."}
-        Notice{message}
-        button{class:"hg-button",onclick:move|_|projects.restart(),"Refresh"}
-        if let Some(Err(error))=projects(){p{role:"alert","{error}"}}
-        for project in rows(&data,"projects") {
-            div{class:"hg-card hg-stack",key:"{project}",
-                strong{{text(&project,"spaceId")}}
-                code{{text(&project,"id")}}
-                p{{format!("Revision {}; active {}",project["revision"],project["active"])}}
-                p{class:"hg-note","Room access policy is managed below after selecting this project."}
-                button{class:"hg-button",onclick:move|_|{
-                    project_id.set(text(&project,"id"));revision.set(project["revision"].to_string());
-                    let policy:Value=serde_json::from_str(&{text(&project,"creationPolicy")}).unwrap_or(Value::Null);
-                    default_allow.set(policy["defaultAllow"]==true);
-                    allow.set(rows(&policy,"allow").iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"));
-                    deny.set(rows(&policy,"deny").iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"));
-                },"Select project"}
+    let selected = rows(&data, "projects")
+        .into_iter()
+        .find(|p| text(p, "id") == project_id());
+    rsx! {div { class:"hg-page hg-stack",
+        div {class:"hg-heading", h1 {"Projects"}
+            button {class:"hg-button hg-secondary", onclick:move |_| projects.restart(), "Refresh"}
+        }
+        p {class:"hg-note", "Manage registered Spaces, Room access and service restrictions. Create Projects and chat in Hagency Desktop."}
+        Notice {message}
+        if projects().is_none() {p {role:"status", "Loading Projects…"}}
+        if let Some(Err(error))=projects() {p {role:"alert", "{error}"}}
+        if projects().is_some_and(|r| r.is_ok()) && rows(&data,"projects").is_empty() {
+            p {"No registered Projects you currently belong to."}
+        }
+        if !rows(&data,"projects").is_empty() {
+            label {class:"hg-field", "Project"
+                select {class:"hg-input", value:project_id(), disabled:busy(), onchange:move |e| {project_id.set(e.value());room.set(String::new());message.set(String::new());},
+                    option {value:"", "Select a Project"}
+                    for item in rows(&data,"projects") {option {value:text(&item,"id"), {name(&item,"spaceId")}}}
+                }
             }
         }
-        form{class:"hg-card hg-stack",onsubmit:move|e|{
-            e.prevent_default();if busy(){return;}let id=space();busy.set(true);
-            spawn(async move{match mutate("/projects/adopt","POST",json!({"spaceId":id.trim()})).await{
-                Ok(_)=>{message.set("Project registered. Room access is allowed by default; deny entries take precedence.".into());projects.restart();},Err(e)=>message.set(e),}busy.set(false);});
-        },h2{"Register an existing Space"}
-            label{"Space ID" input{class:"hg-input",required:true,value:space(),placeholder:"!space:server",oninput:move|e|space.set(e.value())}}
-            button{class:"hg-button",disabled:busy(),r#type:"submit","Register project"}
+        if let Some(item)=selected {
+            section {class:"hg-card hg-stack", h2 {{name(&item,"spaceId")}}
+                if !text(&item,"topic").is_empty() {p {{text(&item,"topic")}}}
+                p {class:"hg-note", "Rooms have independent membership. Joining the Project does not grant access to private Rooms."}
+                details {summary {"Identifiers"} dl {class:"hg-facts", dt {"Project"} dd {{text(&item,"id")}} dt {"Space"} dd {{text(&item,"spaceId")}}}}
+            }
+            super::room_discovery::RoomDiscovery {project_id, room}
+            super::project_controls::ProjectControls {key:"{project_id()}:project", project_id, room_id:String::new()}
+            if !room().is_empty() {
+                super::project_controls::ProjectControls {key:"{project_id()}:{room()}", project_id, room_id:room()}
+            }
+            details {class:"hg-card", summary {"Register an existing Room"}
+                form {class:"hg-stack", onsubmit:move |e| {
+                    e.prevent_default();if busy(){return;}let id=project_id();let room_id=new_room();busy.set(true);
+                    spawn(async move {match mutate(&format!("/projects/{}/rooms/adopt",urlencoding::encode(&id)),"POST",json!({"roomId":room_id.trim()})).await {
+                        Ok(_)=>{message.set("Room registered. Refresh Rooms to view it.".into());new_room.set(String::new());},Err(e)=>message.set(e)
+                    }busy.set(false);});
+                },
+                    p {class:"hg-note", "Requires administration rights in this Room. Link it to the selected Space first."}
+                    label {class:"hg-field", "Room ID" input {class:"hg-input",required:true,value:new_room(),placeholder:"!room:server",oninput:move |e| new_room.set(e.value())}}
+                    div {class:"hg-actions", button {class:"hg-button",disabled:busy(),r#type:"submit","Register Room"}}
+                }
+            }
         }
-        form{class:"hg-card hg-stack",onsubmit:move|e|{
-            e.prevent_default();if busy(){return;}let id=project_id();let room_id=room();busy.set(true);
-            spawn(async move{match mutate(&format!("/projects/{id}/rooms/adopt"),"POST",json!({"roomId":room_id.trim()})).await{Ok(_)=>message.set("Room registered. Its Matrix membership remains independent.".into()),Err(e)=>message.set(e)}busy.set(false);});
-        },h2{"Register a Room in this Space"}
-            label{"Project ID" input{class:"hg-input",required:true,value:project_id(),oninput:move|e|project_id.set(e.value())}}
-            label{"Room ID" input{class:"hg-input",required:true,value:room(),placeholder:"!room:server",oninput:move|e|room.set(e.value())}}
-            button{class:"hg-button",disabled:busy(),r#type:"submit","Register Room"}
-        }
-        super::room_discovery::RoomDiscovery { project_id, room }
-        super::project_controls::ProjectControls { project_id, room }
-        form{class:"hg-card hg-stack",onsubmit:move|e|{
-            e.prevent_default();if busy(){return;}let Ok(expected_revision)=revision().parse::<i64>()else{message.set("Select a project with a valid revision.".into());return;};
-            let id=project_id();let policy=json!({"defaultAllow":default_allow(),"allow":members(&allow()),"deny":members(&deny())});busy.set(true);
-            spawn(async move{match mutate(&format!("/projects/{id}/creation-policy"),"PUT",json!({"expectedRevision":expected_revision,"policy":policy})).await{
-                Ok(_)=>{message.set("Room access policy saved. This policy does not stop existing bindings.".into());projects.restart();},Err(e)=>message.set(e)}busy.set(false);});
-        },h2{"Project Room access rights"}
-            p{"The server checks your current Space administration rights. Deny entries override default permission and explicit allow entries."}
-            label{"Current revision" input{class:"hg-input",required:true,value:revision(),oninput:move|e|revision.set(e.value())}}
-            label{input{r#type:"checkbox",checked:default_allow(),onchange:move|e|default_allow.set(e.checked())}" Members may connect agents to Rooms by default"}
-            label{"Allowed Matrix users (when default permission is off)" textarea{class:"hg-input",value:allow(),oninput:move|e|allow.set(e.value())}}
-            label{"Denied Matrix users" textarea{class:"hg-input",value:deny(),oninput:move|e|deny.set(e.value())}}
-            button{class:"hg-button",disabled:busy()||project_id().is_empty(),r#type:"submit","Save Room access policy"}
+        details {class:"hg-card", summary {"Register an existing Space"}
+            form {class:"hg-stack", onsubmit:move |e| {
+                e.prevent_default();if busy(){return;}let id=space();busy.set(true);
+                spawn(async move {match mutate("/projects/adopt","POST",json!({"spaceId":id.trim()})).await {
+                    Ok(_)=>{message.set("Project registered. Members may connect Agents by default.".into());space.set(String::new());projects.restart();},Err(e)=>message.set(e)
+                }busy.set(false);});
+            },
+                p {class:"hg-note", "Requires administration rights in the Space. To create a new Project, use Hagency Desktop."}
+                label {class:"hg-field", "Space ID" input {class:"hg-input",required:true,value:space(),placeholder:"!space:server",oninput:move |e| space.set(e.value())}}
+                div {class:"hg-actions",button {class:"hg-button",disabled:busy(),r#type:"submit","Register Project"}}
+            }
         }
     }}
 }

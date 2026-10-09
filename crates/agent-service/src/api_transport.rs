@@ -157,6 +157,13 @@ pub(crate) async fn call(
                 json!({"execution":t.start_execution(p,&b.lease,&b.dispatch_id,&b.execution_id,&f,now_ms()).await?}),
             )
         }
+        "/api/hagency/v1/execution/events/processing" => {
+            let b: Start = body(req).await?;
+            let f = facts(t, g, p, &b.dispatch_id).await?;
+            Ok(
+                json!({"processing":t.mark_processing(p,&b.lease,&b.dispatch_id,&b.execution_id,&f,now_ms()).await?}),
+            )
+        }
         "/api/hagency/v1/execution/events/authorize-tool" => {
             let b: Start = body(req).await?;
             let f = facts(t, g, p, &b.dispatch_id).await?;

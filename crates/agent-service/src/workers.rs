@@ -21,6 +21,18 @@ fn reply_content(owner_direct: bool, room: &str, root: &str, body: &str) -> Valu
     content
 }
 
+fn pause_notice_content(owner_direct: bool, room: &str, root: &str) -> Value {
+    let mut content = reply_content(
+        owner_direct,
+        room,
+        root,
+        crate::transport::pause_notices::BODY,
+    );
+    // Matrix bots conventionally ignore notices, preventing automated reply loops.
+    content["msgtype"] = json!("m.notice");
+    content
+}
+
 /// Only canonical plaintext text events enter the model queue. In particular,
 /// HTML-looking mentions, edits, and encrypted bodies do not create prompts.
 fn parse_event(raw: &Value) -> Option<RoutedEvent> {
@@ -232,6 +244,135 @@ async fn send(
     }
     Ok(())
 }
+async fn send_pause_notices(
+    t: &TransportStore,
+    g: &Gateway,
+    m: &MatrixClient,
+    cursor: &mut String,
+) -> Result<()> {
+    let mut unavailable_rooms = BTreeSet::new();
+    for candidate in t.pause_notice_candidates(cursor, now_ms()).await? {
+        *cursor = candidate.id.clone();
+        let scope = match t.pause_notice_scope(&candidate.binding_id).await {
+            Ok(scope) => scope,
+            Err(Error::Unauthorized(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        if unavailable_rooms.contains(&scope.room_id) {
+            continue;
+        }
+        let observed = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            g.delivery(
+                &scope.room_id,
+                &scope.space_id,
+                &scope.owner_mxid,
+                &candidate.requester_mxid,
+                &scope.puppet_mxid,
+            ),
+        )
+        .await;
+        let f = match observed {
+            Ok(Ok(f)) => f,
+            _ => {
+                unavailable_rooms.insert(scope.room_id.clone());
+                continue;
+            }
+        };
+        let notice = match t.claim_pause_notice(&candidate.id, &f, now_ms()).await {
+            Ok(n) => n,
+            Err(Error::Conflict(_) | Error::Unauthorized(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        let worker = notice
+            .worker_token
+            .as_deref()
+            .ok_or(Error::Unavailable("missing_sender_claim"))?;
+        let content = pause_notice_content(
+            scope.space_id.is_empty(),
+            &scope.room_id,
+            &notice.thread_root,
+        );
+        let outcome = m
+            .send(
+                &scope.puppet_mxid,
+                &scope.room_id,
+                &notice.matrix_txn_id,
+                content,
+            )
+            .await;
+        t.confirm_pause_notice(&notice.id, worker, &outcome, now_ms())
+            .await?;
+    }
+    Ok(())
+}
+async fn send_processing(
+    t: &TransportStore,
+    g: &Gateway,
+    m: &MatrixClient,
+    cursor: &mut String,
+) -> Result<()> {
+    let mut unavailable_rooms = BTreeSet::new();
+    for candidate in t.processing_candidates(cursor, 20, now_ms()).await? {
+        *cursor = candidate.id.clone();
+        let scope = match t.binding_scope(&candidate.binding_id).await {
+            Ok(scope) => scope,
+            Err(Error::Unauthorized(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        if unavailable_rooms.contains(&scope.room_id) {
+            continue;
+        }
+        let observed = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            g.delivery(
+                &scope.room_id,
+                &scope.space_id,
+                &scope.owner_mxid,
+                &candidate.requester_mxid,
+                &scope.puppet_mxid,
+            ),
+        )
+        .await;
+        let f = match observed {
+            Ok(Ok(f)) => f,
+            _ => {
+                unavailable_rooms.insert(scope.room_id.clone());
+                continue;
+            }
+        };
+        let intent = match t.claim_processing(&candidate.id, &f, now_ms()).await {
+            Ok(intent) => intent,
+            Err(Error::Unauthorized(_) | Error::Conflict(_)) => {
+                t.block_processing(&candidate.id, &f, now_ms()).await?;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        let worker = intent
+            .worker_token
+            .as_deref()
+            .ok_or(Error::Unavailable("missing_sender_claim"))?;
+        let outcome = m
+            .send_processing(
+                &intent.puppet_mxid,
+                &intent.room_id,
+                &intent.matrix_txn_id,
+                intent.content.clone(),
+            )
+            .await;
+        let denied = matches!(outcome, Err(Error::Conflict("matrix_permission_missing")));
+        t.confirm_processing(
+            &intent.id,
+            worker,
+            outcome.as_ref().ok().map(String::as_str),
+            denied,
+            now_ms(),
+        )
+        .await?;
+    }
+    Ok(())
+}
 pub(crate) fn start(
     inbox: Inbox,
     t: TransportStore,
@@ -241,6 +382,8 @@ pub(crate) fn start(
     tokio::spawn(async move {
         let mut route_cursor = String::new();
         let mut reply_cursor = String::new();
+        let mut processing_cursor = String::new();
+        let mut pause_cursor = String::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -250,7 +393,9 @@ pub(crate) fn start(
             // pass must not block already accepted reply intents from being sent.
             let _ = tokio::join!(
                 route(&inbox, &t, &g, &mut route_cursor),
-                send(&t, &g, &m, &mut reply_cursor)
+                send(&t, &g, &m, &mut reply_cursor),
+                send_processing(&t, &g, &m, &mut processing_cursor),
+                send_pause_notices(&t, &g, &m, &mut pause_cursor)
             );
         }
     })
@@ -458,6 +603,17 @@ mod tests {
             reply_content(false, "!project:x", "$original", "reply")
         );
         assert_eq!(legacy, reply_content(true, "!dm:x", "$original", "reply"));
+    }
+    #[test]
+    fn paused_service_feedback_is_a_notice_and_never_routes_back_to_inference() {
+        let flat = pause_notice_content(true, "!dm:x", "!dm:x");
+        assert_eq!(flat["msgtype"], "m.notice");
+        assert!(flat.get("m.relates_to").is_none());
+        assert!(flat.get("m.mentions").is_none());
+        let threaded = pause_notice_content(false, "!room:x", "$request");
+        assert_eq!(threaded["m.relates_to"]["event_id"], "$request");
+        let raw = json!({"type":"m.room.message","event_id":"$notice","room_id":"!room:x","sender":"@external-bot:x","content":threaded});
+        assert!(parse_event(&raw).is_none());
     }
     #[test]
     fn canonical_mentions_and_threads_only() {

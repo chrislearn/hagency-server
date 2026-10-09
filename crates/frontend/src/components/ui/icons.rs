@@ -3,6 +3,24 @@ use dioxus::prelude::*;
 #[component]
 pub fn Icon(name: String, #[props(default = "h-4 w-4".to_string())] class: String) -> Element {
     match name.as_str() {
+        "play" => {
+            rsx! {svg {class:"{class}",view_box:"0 0 24 24",fill:"currentColor",polygon {points:"6,3 21,12 6,21"}}}
+        }
+        "pause" => {
+            rsx! {svg {class:"{class}",view_box:"0 0 24 24",fill:"currentColor",rect {x:"6",y:"4",width:"4",height:"16",rx:"1"}rect {x:"14",y:"4",width:"4",height:"16",rx:"1"}}}
+        }
+        "check-circle" | "x-circle" | "minus-circle" => {
+            rsx! {svg {class:"{class}",view_box:"0 0 24 24",fill:"none",stroke:"currentColor",stroke_width:"2",stroke_linecap:"round",stroke_linejoin:"round",
+                circle {cx:"12",cy:"12",r:"9"}
+                if name=="check-circle" {path {d:"m8 12 3 3 5-6"}} else if name=="x-circle" {path {d:"m9 9 6 6m0-6-6 6"}} else {path {d:"M8 12h8"}}
+            }}
+        }
+        "log-in" => {
+            rsx! {svg {class:"{class}",view_box:"0 0 24 24",fill:"none",stroke:"currentColor",stroke_width:"2",stroke_linecap:"round",stroke_linejoin:"round",path {d:"M15 3h5v18h-5M3 12h12m-4-4 4 4-4 4"}}}
+        }
+        "shield-off" => {
+            rsx! {svg {class:"{class}",view_box:"0 0 24 24",fill:"none",stroke:"currentColor",stroke_width:"2",stroke_linecap:"round",stroke_linejoin:"round",path {d:"m3 3 18 18M9 4l3-1 8 3v6c0 2-1 4-2 5M4 6v6c0 5 8 9 8 9l3-2"}}}
+        }
         "users" => rsx! {
             svg {
                 class: "{class}",

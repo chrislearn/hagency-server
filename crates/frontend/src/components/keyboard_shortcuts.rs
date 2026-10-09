@@ -65,15 +65,23 @@ pub fn KeyboardShortcuts() -> Element {
             // Only accept if within 500ms.
             if now - ts <= 500.0 && first_key == "g" {
                 match key_str.as_str() {
-                    "d" => {
+                    "p" => {
+                        nav.push(Route::HagencyProjects {});
+                        return;
+                    }
+                    "a" => {
+                        nav.push(Route::HagencyAgents {});
+                        return;
+                    }
+                    "d" if crate::router::is_server_admin() => {
                         nav.push(Route::Dashboard {});
                         return;
                     }
-                    "u" => {
+                    "u" if crate::router::is_server_admin() => {
                         nav.push(Route::UserList {});
                         return;
                     }
-                    "r" => {
+                    "r" if crate::router::is_server_admin() => {
                         nav.push(Route::RoomList {});
                         return;
                     }
@@ -151,6 +159,8 @@ fn ShortcutHelpModal() -> Element {
                             }
                             td { class: "py-2", "Toggle this help dialog" }
                         }
+                        for (key,action) in [("p","Projects"),("a","My Agents")] {tr {class:"border-b",td {class:"py-2",kbd {"g"} " then " kbd {"{key}"}}td {class:"py-2","Go to {action}"}}}
+                        if crate::router::is_server_admin() {
                         tr { class: "border-b",
                             td { class: "py-2",
                                 kbd { class: "rounded bg-muted px-1.5 py-0.5 font-mono text-xs", "g" }
@@ -174,6 +184,7 @@ fn ShortcutHelpModal() -> Element {
                                 kbd { class: "rounded bg-muted px-1.5 py-0.5 font-mono text-xs", "r" }
                             }
                             td { class: "py-2", "Go to Rooms" }
+                        }
                         }
                     }
                 }

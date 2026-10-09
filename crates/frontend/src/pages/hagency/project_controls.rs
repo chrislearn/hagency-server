@@ -1,105 +1,116 @@
 use super::common::*;
 use dioxus::prelude::*;
-use serde_json::json;
+use serde_json::{Value, json};
 
+/// A keyed editor owns one scope; switching selection discards its draft and pending responses.
 #[component]
-pub fn ProjectControls(project_id: Signal<String>, room: Signal<String>) -> Element {
+pub fn ProjectControls(project_id: Signal<String>, room_id: String) -> Element {
+    let room_scope = !room_id.is_empty();
+    let path = if room_scope {
+        format!(
+            "/projects/{}/rooms/{}",
+            urlencoding::encode(&project_id()),
+            urlencoding::encode(&room_id)
+        )
+    } else {
+        format!("/projects/{}", urlencoding::encode(&project_id()))
+    };
+    let read_path = path.clone();
+    let mut state = use_resource(move || {
+        let path = read_path.clone();
+        async move {
+            browser_auth::call(&format!("{path}/service-state"), "GET", None)
+                .await
+                .map_err(|e| e.message)
+        }
+    });
     let mut mode = use_signal(|| "inherit_project".to_string());
-    let mut revision = use_signal(|| "1".to_string());
+    let mut default_allow = use_signal(|| true);
     let mut allow = use_signal(String::new);
     let mut deny = use_signal(String::new);
-    let mut room_scope = use_signal(|| false);
+    let mut loaded_revision = use_signal(|| None::<i64>);
     let mut message = use_signal(String::new);
     let mut busy = use_signal(|| false);
-    let mut paused = use_signal(|| None::<bool>);
-    let selected_path = move || {
-        let project = project_id();
-        if project.is_empty() {
-            return None;
-        }
-        if room_scope() {
-            if room().is_empty() {
-                return None;
+    use_effect(move || {
+        loaded_revision.set(None);
+        if let Some(Ok(value)) = state() {
+            match policy(&value) {
+                Ok(policy) => {
+                    mode.set(text(&policy, "mode"));
+                    default_allow.set(policy["defaultAllow"] == true);
+                    allow.set(member_lines(&policy, "allow"));
+                    deny.set(member_lines(&policy, "deny"));
+                    loaded_revision.set(value["revision"].as_i64());
+                }
+                Err(e) => message.set(e),
             }
-            Some(format!(
-                "/projects/{}/rooms/{}",
-                urlencoding::encode(&project),
-                urlencoding::encode(&room())
-            ))
-        } else {
-            Some(format!("/projects/{}", urlencoding::encode(&project)))
         }
-    };
-    rsx! {
-        div { class: "hg-card hg-stack",
-            h2 { "Room access rights" }
-            p { "Uses the Project ID and Room ID above. Room restrictions apply to new bindings; changing access rights does not stop existing bindings." }
-            Notice { message }
-            form { class: "hg-stack", onsubmit: move |e| {
-                e.prevent_default();
-                if busy() || project_id().is_empty() || room().is_empty() { return; }
-                let Ok(expected_revision) = revision().parse::<i64>() else { message.set("Enter the current Room revision.".into()); return; };
-                let policy = match mode().as_str() {
-                    "disabled" => json!({"mode":"disabled"}),
-                    "allow_list" => json!({"mode":"allow_list","allow":members(&allow()),"deny":members(&deny())}),
-                    _ => json!({"mode":"inherit_project","deny":members(&deny())}),
-                };
-                let path = format!("/projects/{}/rooms/{}/creation-policy",urlencoding::encode(&project_id()),urlencoding::encode(&room()));
-                busy.set(true);
-                spawn(async move {
-                    match browser_auth::call(&path,"PUT",Some(json!({"expectedRevision":expected_revision,"policy":policy}))).await {
-                        Ok(result) => {
-                            if let Some(next) = result["room"]["revision"].as_i64() { revision.set(next.to_string()); }
-                            message.set("Room access rights saved. Existing agents keep their runtime state.".into());
-                        }, Err(e) => message.set(e.message),
-                    }
-                    busy.set(false);
-                });
+    });
+    let data = state().and_then(Result::ok).unwrap_or(Value::Null);
+    let can_manage = data["canManagePolicy"] == true;
+    let own_paused = data[if room_scope {
+        "roomPaused"
+    } else {
+        "projectPaused"
+    }] == true;
+    let policy_path = path.clone();
+    let pause_path = path.clone();
+    rsx! {section {class:"hg-card hg-stack",
+        h2 {if room_scope {"Room Agent access"} else {"Project Agent access"}}
+        if room_scope {p {class:"hg-note", "{room_id}"}}
+        p {class:"hg-note", "Controls who may add their own Agents. Existing bindings are stopped only by a service pause. Limits and model resources are managed on the Agent’s execution device."}
+        Notice {message}
+        if state().is_none() {p {role:"status", "Loading access settings…"}}
+        if let Some(Err(error))=state() {p {role:"alert", "{error}"}}
+        if let Some(Ok(_))=state() {
+            p {if data["servicePaused"]==true {"Agent service is paused in this scope."} else {"No administrative service pause."}}
+            if !can_manage {p {class:"hg-note", "Read only. Editing requires current Matrix administration rights in this Space or Room; a server Admin role alone does not grant them."}}
+        }
+        div {class:"hg-actions", button {class:"hg-button hg-secondary",disabled:busy(),onclick:move |_| state.restart(),"Refresh access"}}
+        if loaded_revision().is_some() {
+            form {class:"hg-stack", onsubmit:move |e| {
+                e.prevent_default();if busy()||!can_manage{return;}
+                let Some(expected_revision)=loaded_revision()else{return;};
+                let policy=if room_scope {match mode().as_str() {
+                    "disabled"=>json!({"mode":"disabled"}),
+                    "allow_list"=>json!({"mode":"allow_list","allow":members(&allow()),"deny":members(&deny())}),
+                    _=>json!({"mode":"inherit_project","deny":members(&deny())}),
+                }}else {json!({"defaultAllow":default_allow(),"allow":members(&allow()),"deny":members(&deny())})};
+                let path=policy_path.clone();busy.set(true);
+                spawn(async move {match browser_auth::call(&format!("{path}/creation-policy"),"PUT",Some(json!({"expectedRevision":expected_revision,"policy":policy}))).await {
+                    Ok(_)=>{message.set("Access policy saved.".into());state.restart();},
+                    Err(e)=>{message.set(format!("{} Refresh access before retrying.",e.message));loaded_revision.set(None);}
+                }busy.set(false);});
             },
-                label { "Room policy" select { class: "hg-input", value: mode(), onchange: move |e| mode.set(e.value()),
-                    option { value: "inherit_project", "Inherit Project with Room deny list" }
-                    option { value: "allow_list", "Only listed Room members" }
-                    option { value: "disabled", "Disable new agent bindings in this Room" }
-                } }
-                label { "Current Room revision" input { class: "hg-input", value: revision(), oninput: move |e| revision.set(e.value()), required: true } }
-                if mode() == "allow_list" { label { "Allowed Matrix users" textarea { class: "hg-input", value: allow(), oninput: move |e| allow.set(e.value()) } } }
-                if mode() != "disabled" { label { "Denied Matrix users" textarea { class: "hg-input", value: deny(), oninput: move |e| deny.set(e.value()) } } }
-                button { class: "hg-button", r#type: "submit", disabled: busy() || project_id().is_empty() || room().is_empty(), "Save Room access policy" }
+                if room_scope {
+                    label {class:"hg-field", "Who may add Agents?" select {class:"hg-input",value:mode(),disabled:busy()||!can_manage,onchange:move |e| mode.set(e.value()),
+                        option {value:"inherit_project", "Inherit Project policy"}
+                        option {value:"allow_list", "Only listed Room members"}
+                        option {value:"disabled", "No new Agents"}
+                    }}
+                } else {
+                    label {input {r#type:"checkbox",checked:default_allow(),disabled:busy()||!can_manage,onchange:move |e| default_allow.set(e.checked())} " Members may add Agents by default"}
+                }
+                if (room_scope&&mode()=="allow_list")||(!room_scope&&!default_allow()) {
+                    label {class:"hg-field", "Allowed Matrix users" textarea {class:"hg-input",value:allow(),disabled:busy()||!can_manage,placeholder:"@user:server",oninput:move |e| allow.set(e.value())}}
+                }
+                if !room_scope||mode()!="disabled" {
+                    label {class:"hg-field", "Denied Matrix users" textarea {class:"hg-input",value:deny(),disabled:busy()||!can_manage,placeholder:"One Matrix ID per line. Deny takes precedence.",oninput:move |e| deny.set(e.value())}}
+                }
+                if can_manage {div {class:"hg-actions",button {class:"hg-button",r#type:"submit",disabled:busy()||loaded_revision().is_none(),"Save access policy"}}}
             }
         }
-        div { class: "hg-card hg-stack",
-            h2 { "Administrator service pause" }
-            p { "A service pause blocks new agents and bindings and suspends existing bindings in this scope. Clearing it permits owners to resume; it never resumes their agents automatically." }
-            label { input { r#type: "checkbox", checked: room_scope(), onchange: move |e| { room_scope.set(e.checked()); paused.set(None); } } " Limit to the Room above" }
-            if let Some(value) = paused() { p { {if value { "Service is paused" } else { "No administrator service pause; owners may still need to resume their bindings" }} } }
-            button { class: "hg-button", disabled: busy() || selected_path().is_none(), onclick: move |_| {
-                let Some(path) = selected_path() else { return; }; busy.set(true);
-                spawn(async move {
-                    match browser_auth::call(&format!("{path}/service-state"),"GET",None).await {
-                        Ok(state) => {
-                            paused.set(state["servicePaused"].as_bool());
-                            if let Some(rev) = state["revision"].as_i64() { if room_scope() { revision.set(rev.to_string()); } }
-                            message.set("Service state refreshed.".into());
-                        }, Err(e) => message.set(e.message),
-                    }
-                    busy.set(false);
-                });
-            }, "Check service state" }
-            for (action,label) in [("pause-service","Pause service"),("clear-service-pause","Clear administrator pause")] {
-                button { class: "hg-button", disabled: busy() || selected_path().is_none(), onclick: move |_| {
-                    let Some(path) = selected_path() else { return; }; busy.set(true);
-                    spawn(async move {
-                        match browser_auth::call(&format!("{path}/{action}"),"POST",None).await {
-                            Ok(_) => {
-                                paused.set(None);
-                                if let Ok(state) = browser_auth::call(&format!("{path}/service-state"),"GET",None).await { paused.set(state["servicePaused"].as_bool()); }
-                                message.set(if action == "pause-service" { "Service paused in the selected scope." } else { "Administrator pause cleared. Each owner must explicitly resume their bindings." }.into()); },
-                            Err(e) => message.set(e.message),
-                        }
-                        busy.set(false);
-                    });
-                }, "{label}" }
+        if can_manage {
+            details {summary {"Service pause"}
+                p {class:"hg-note", "Pause blocks new bindings and suspends existing ones. Clearing a pause lets owners resume their bindings; it does not restart their devices."}
+                if room_scope&&data["projectPaused"]==true {p {class:"hg-note", "The Project is paused. Clearing only this Room’s pause cannot restore service."}}
+                div {class:"hg-actions", button {class:"hg-button hg-secondary",disabled:busy(),onclick:move |_| {
+                    let path=pause_path.clone();let action=if own_paused {"clear-service-pause"}else{"pause-service"};busy.set(true);
+                    spawn(async move {match browser_auth::call(&format!("{path}/{action}"),"POST",None).await {
+                        Ok(_)=>{message.set(if own_paused {"Pause cleared. Owners may resume bindings."} else {"Service paused."}.into());state.restart();},Err(e)=>message.set(e.message)
+                    }busy.set(false);});
+                },if own_paused {"Clear service pause"}else {"Pause service"}}}
             }
         }
-    }
+    }}
 }

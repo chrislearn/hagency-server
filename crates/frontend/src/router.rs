@@ -149,6 +149,47 @@ pub fn is_server_admin() -> bool {
     *ADMIN_VERDICT.read() == Some(true)
 }
 
+/// Only known application routes can be restored after an OAuth redirect.
+pub fn restorable_route(path: &str, admin: bool) -> Option<Route> {
+    let route: Route = path.parse().ok()?;
+    if matches!(
+        route,
+        Route::LoginPage {} | Route::OAuthCallback { .. } | Route::NotFound { .. }
+    ) {
+        return None;
+    }
+    if !admin && !matches!(route, Route::HagencyProjects {} | Route::HagencyAgents {}) {
+        return None;
+    }
+    Some(route)
+}
+
+#[cfg(test)]
+mod return_route_tests {
+    use super::*;
+    #[test]
+    fn oauth_return_does_not_allow_external_or_unauthorized_routes() {
+        for path in [
+            "https://evil.example/users",
+            "//evil.example/users",
+            "/login",
+            "/oauth/callback",
+            "/does-not-exist",
+        ] {
+            assert!(restorable_route(path, true).is_none());
+        }
+        assert!(matches!(
+            restorable_route("/users", true),
+            Some(Route::UserList {})
+        ));
+        assert!(restorable_route("/users", false).is_none());
+        assert!(matches!(
+            restorable_route("/hagency/agents", false),
+            Some(Route::HagencyAgents {})
+        ));
+    }
+}
+
 #[component]
 fn AuthenticatedLayout() -> Element {
     let nav = use_navigator();
@@ -222,7 +263,7 @@ fn AuthenticatedLayout() -> Element {
         (None, Some(message)) => rsx! {
             div { class: "flex min-h-screen items-center justify-center bg-background p-4",
                 div { class: "w-full max-w-md space-y-4 text-center",
-                    h1 { class: "text-2xl font-bold tracking-tight", "Unable to verify administrator access" }
+                    h1 { class: "text-2xl font-bold tracking-tight", "Unable to verify account access" }
                     p { class: "text-muted-foreground text-sm break-all", "{message}" }
                     crate::components::ui::button::Button {
                         class: "w-full".to_string(),

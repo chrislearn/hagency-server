@@ -8,6 +8,7 @@
 /config.docker.toml
 /.run/
 .env
+/docs/design/screenshots/
 
 /resources/pasion/
 /backups/

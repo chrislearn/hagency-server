@@ -301,7 +301,7 @@ pub fn UserList() -> Element {
         div { class: "space-y-6",
             PageHeader {
                 title: t("users.title"),
-                description: t("users.subtitle"),
+                description: "Matrix identities include people and Appservice puppets. Create and manage people’s accounts in Local Accounts.".to_string(),
                 if crate::utils::storage::get_item("oauth_enabled").as_deref() != Some("true") { Button {
                     variant: ButtonVariant::Outline,
                     onclick: move |_| show_import_dialog.set(true),
@@ -614,7 +614,7 @@ pub fn UserList() -> Element {
                                                                     {t("users.admin")}
                                                                 }
                                                             } else {
-                                                                Badge { variant: BadgeVariant::Secondary, {t("common.user")} }
+                                                                Badge { variant: BadgeVariant::Secondary, if user_id.starts_with("@_hagency_agt_") {"Agent"} else if user_id.starts_with("@_hagency_") {"Hagency service"} else {{t("common.user")}} }
                                                             }
                                                         }
                                                     }

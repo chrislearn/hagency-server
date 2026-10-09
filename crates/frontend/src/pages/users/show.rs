@@ -50,6 +50,7 @@ pub fn UserShow(user_id: String) -> Element {
     let mut edit_admin = use_signal(|| false);
     let mut reset_password_value = use_signal(|| String::new());
     let nav = use_navigator();
+    let service_identity = decoded_user_id.starts_with("@_hagency_");
     let has_pasion = crate::utils::storage::get_item("oauth_enabled").as_deref() == Some("true");
 
     rsx! {
@@ -90,7 +91,7 @@ pub fn UserShow(user_id: String) -> Element {
                                 description: user_id_str.clone(),
                             }
                             div { class: "flex gap-2",
-                                if has_pasion {
+                                if has_pasion && !service_identity {
                                     Button {
                                         variant: ButtonVariant::Outline,
                                         onclick: {
@@ -233,7 +234,9 @@ pub fn UserShow(user_id: String) -> Element {
                                                         oninput: move |evt: FormEvent| edit_display_name.set(evt.value()),
                                                     }
                                                 }
-                                                if has_pasion {
+                                                if service_identity {
+                                                    p {class:"text-sm text-muted-foreground","Appservice identities have no personal Pasion account or administrator role."}
+                                                } else if has_pasion {
                                                     // The homeserver admin flag mirrors the Pasion
                                                     // account's admin role; palpo refuses local changes.
                                                     p { class: "text-sm text-muted-foreground",
@@ -522,6 +525,7 @@ pub fn UserShow(user_id: String) -> Element {
                             },
                         }
 
+                        if service_identity {p {class:"text-sm text-muted-foreground", "This is an Appservice identity, not a personal Pasion account. Agent ownership and execution devices are managed by its owner in Hagency Desktop."}}
                         // Deactivate dialog
                         DeactivateUserDialog {
                             open: *show_deactivate_dialog.read(),

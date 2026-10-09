@@ -84,6 +84,21 @@ async fn user(store: &Store, suffix: &str, name: &str) -> (String, Principal) {
         .await
         .unwrap();
     let p = store.authenticate(&grant.token, *NOW, false).await.unwrap();
+    let device = store
+        .register_device(
+            &grant.token,
+            crate::store::RegisterDevice {
+                installation_id: format!("create-{}", p.user_id),
+                name: "Creation device".into(),
+            },
+            crate::api::now_ms(),
+        )
+        .await
+        .unwrap();
+    let p = store
+        .authenticate(&device.token, crate::api::now_ms(), true)
+        .await
+        .unwrap();
     (grant.token, p)
 }
 #[tokio::test]
@@ -1312,13 +1327,11 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
         .unwrap();
     let dp = auth.authenticate(&device.token, *NOW, true).await.unwrap();
     domain
-        .set_execution_instance(
-            &p,
+        .set_execution_device(
+            &dp,
             &agent_id,
-            SetExecutionInstance {
-                device_id: dp.device_id.clone().unwrap(),
-                name: "Membership instance".into(),
-                expected_generation: 0,
+            SetExecutionDevice {
+                expected_generation: domain.agent(&dp, &agent_id, *NOW).await.unwrap().generation,
             },
             *NOW,
         )
@@ -1580,7 +1593,10 @@ async fn postgres_global_identity_create_needs_no_project_or_room_and_binding_is
     };
     let agent = domain.create_agent(&p, make(), *NOW).await.unwrap();
     crate::assert_entity_id(&agent.id, "agt_");
-    assert_eq!(agent.puppet_mxid, format!("@_hagency_test_{}:example.test", agent.id));
+    assert_eq!(
+        agent.puppet_mxid,
+        format!("@_hagency_test_{}:example.test", agent.id)
+    );
     assert_eq!(agent.state, "creating");
     assert_eq!(agent.owner_user_id, p.user_id);
     assert!(

@@ -25,7 +25,7 @@ pub fn NotAuthorizedPage() -> Element {
     };
 
     rsx! {
-        div { class: "flex min-h-screen items-center justify-center bg-background p-4",
+        div { class: "hg-access-denied",
             div { class: "w-full max-w-md space-y-6 text-center",
                 div { class: "mx-auto h-16 w-16 rounded-full bg-destructive/10 flex items-center justify-center",
                     crate::components::ui::icons::Icon {
@@ -36,7 +36,7 @@ pub fn NotAuthorizedPage() -> Element {
                 div { class: "space-y-2",
                     h1 { class: "text-2xl font-bold tracking-tight", {t("auth.not_admin")} }
                     p { class: "text-muted-foreground text-sm",
-                        "Your account does not have server administrator privileges, so the admin dashboard cannot be shown. Sign out and log in as an administrator, or ask an existing admin to grant you access."
+                        "This page requires server administrator privileges. You can continue using your own Projects and Agents."
                     }
                 }
                 if !display_name.is_empty() || !user_id.is_empty() {

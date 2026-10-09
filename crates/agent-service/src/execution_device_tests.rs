@@ -1,7 +1,7 @@
 use super::*;
 #[tokio::test]
 #[ignore = "requires dedicated PostgreSQL database via HAGENCY_AGENT_TEST_DATABASE_URL"]
-async fn postgres_execution_instance_is_unique_owner_scoped_and_blocks_other_device_takeover() {
+async fn postgres_agent_execution_device_is_current_owned_cas_and_blocks_other_device_takeover() {
     fn copy_reply(input: &SubmitReply) -> SubmitReply {
         SubmitReply {
             dispatch_id: input.dispatch_id.clone(),
@@ -12,14 +12,12 @@ async fn postgres_execution_instance_is_unique_owner_scoped_and_blocks_other_dev
     let f = fixture().await;
     let stranger = fixture().await;
     let now = crate::api::now_ms();
-    let original = f
-        .domain
-        .execution_instance(&f.p, &f.agent, now)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(original.device_id, f.p.device_id.as_deref().unwrap());
-    crate::assert_entity_id(&original.id, "ins_");
+    let original = f.domain.agent(&f.p, &f.agent, now).await.unwrap();
+    assert_eq!(
+        original.execution_device_id.as_deref().unwrap(),
+        f.p.device_id.as_deref().unwrap()
+    );
+    crate::assert_entity_id(&original.id, "agt_");
     assert!(
         f.transport
             .acquire_for_test(&f.second, &f.agent, 60000, true, now)
@@ -27,20 +25,13 @@ async fn postgres_execution_instance_is_unique_owner_scoped_and_blocks_other_dev
             .is_err(),
         "same owner takeover is not a device assignment"
     );
+    assert!(f.domain.agent(&stranger.p, &f.agent, now).await.is_err());
     assert!(
         f.domain
-            .execution_instance(&stranger.p, &f.agent, now)
-            .await
-            .is_err()
-    );
-    assert!(
-        f.domain
-            .set_execution_instance(
-                &f.p,
+            .set_execution_device(
+                &stranger.p,
                 &f.agent,
-                crate::domain::SetExecutionInstance {
-                    device_id: stranger.p.device_id.clone().unwrap(),
-                    name: "Wrong owner".into(),
+                crate::domain::SetExecutionDevice {
                     expected_generation: original.generation
                 },
                 now
@@ -64,16 +55,37 @@ async fn postgres_execution_instance_is_unique_owner_scoped_and_blocks_other_dev
         agent_id: f.agent.clone(),
         epoch: old.epoch,
     };
+    let unchanged = f
+        .domain
+        .set_execution_device(
+            &f.p,
+            &f.agent,
+            crate::domain::SetExecutionDevice {
+                expected_generation: original.generation,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.generation, original.generation);
+    assert_eq!(unchanged.execution_device_id, original.execution_device_id);
+    let renewed = f
+        .transport
+        .renew_lease(&f.p, &old_ref, 60000, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        renewed.epoch, old.epoch,
+        "same-device save must not invalidate lease"
+    );
     let event = enqueue(&f, "instance-old-running").await;
     running(&f, &old_ref, &event, "instance-running-execution").await;
     assert!(
         f.domain
-            .set_execution_instance(
+            .set_execution_device(
                 &f.p,
                 &f.agent,
-                crate::domain::SetExecutionInstance {
-                    device_id: f.second.device_id.clone().unwrap(),
-                    name: "Stale form".into(),
+                crate::domain::SetExecutionDevice {
                     expected_generation: 0
                 },
                 now
@@ -116,12 +128,10 @@ async fn postgres_execution_instance_is_unique_owner_scoped_and_blocks_other_dev
     }
     let next = f
         .domain
-        .set_execution_instance(
-            &f.p,
+        .set_execution_device(
+            &f.second,
             &f.agent,
-            crate::domain::SetExecutionInstance {
-                device_id: f.second.device_id.clone().unwrap(),
-                name: "Replacement".into(),
+            crate::domain::SetExecutionDevice {
                 expected_generation: original.generation,
             },
             now,
@@ -181,7 +191,7 @@ async fn postgres_execution_instance_is_unique_owner_scoped_and_blocks_other_dev
         assert!(
             matches!(
                 result,
-                Err(Error::Unauthorized("execution_instance_device_required"))
+                Err(Error::Unauthorized("execution_device_required"))
             ),
             "every old-device execution action must hit assignment fencing"
         );
@@ -264,10 +274,12 @@ async fn postgres_execution_instance_is_unique_owner_scoped_and_blocks_other_dev
     .await
     .unwrap();
     assert!(
-        diesel::sql_query("DELETE FROM hagency_agent_v1.execution_instances WHERE agent_id=$1")
-            .bind::<diesel::sql_types::Text, _>(&f.agent)
-            .execute(&mut db)
-            .await
-            .is_err()
+        diesel::sql_query(
+            "UPDATE hagency_agent_v1.agents SET execution_device_id=NULL WHERE id=$1"
+        )
+        .bind::<diesel::sql_types::Text, _>(&f.agent)
+        .execute(&mut db)
+        .await
+        .is_err()
     );
 }

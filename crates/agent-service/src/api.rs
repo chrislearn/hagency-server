@@ -177,8 +177,8 @@ impl App {
         if path == "/api/hagency/v1/discovery" && method == salvo::http::Method::GET {
             return Ok(
                 json!({"product":"hagency-server","version":env!("CARGO_PKG_VERSION"),
-                "capabilities":["pasion-oauth","owner-agent-appservice-v1","projects-matrix-spaces-v1","device-execution-v1","execution-history-v1","global-agent-identity-v2","execution-instance-v1","owner-direct-v1"],
-                "protocolVersion":2,"serverName":self.server_name,"homeserver":self.public,
+                "capabilities":["pasion-oauth","owner-agent-appservice-v1","projects-matrix-spaces-v1","device-execution-v1","execution-history-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1","processing-reaction-v1"],
+                "protocolVersion":3,"serverName":self.server_name,"homeserver":self.public,
                 "serviceMxid":format!("@_hagency_service:{}",self.server_name),"issuer":self.issuer,"authorizationEndpoint":self.issuer.join("authorize").unwrap(),
                 "tokenEndpoint":self.issuer.join("oauth2/token").unwrap(),
                 "registrationEndpoint":self.issuer.join("oauth2/registration").unwrap(),"authorizationWindowMs":30000}),
@@ -255,7 +255,13 @@ impl App {
                 .1;
             return crate::api_transport::call(transport, gateway, &principal, req).await;
         }
-        let principal = self.store.authenticate(&credential, now, false).await?;
+        let device_management = (path == "/api/hagency/v1/agents"
+            && method == salvo::http::Method::POST)
+            || (path.ends_with("/execution-device") && method == salvo::http::Method::PUT);
+        let principal = self
+            .store
+            .authenticate(&credential, now, device_management)
+            .await?;
         if let Some((domain, gateway)) = &self.domain {
             if path == "/api/hagency/v1/agents" && method == salvo::http::Method::GET {
                 return Ok(json!({"agents":domain.agents(&principal,now).await?}));
@@ -305,6 +311,7 @@ impl App {
                     .parse_json()
                     .await
                     .map_err(|_| Error::Invalid("invalid_arguments"))?;
+                let principal = self.store.authenticate(&credential, now_ms(), true).await?;
                 let agent = domain.create_agent(&principal, body, now_ms()).await?;
                 return Ok(
                     json!({"commandState":if agent.state=="active" {"active"} else {"pending"},"creation":{"agent":agent},"pendingReason":null}),
@@ -354,21 +361,19 @@ impl App {
                     json!({"ownerDirectRoomId":body.room_id,"commandState":if creation.binding.state=="active" {"active"}else{"pending"},"creation":creation}),
                 );
             }
-            if parts.len() == 7 && parts[4] == "agents" && parts[6] == "execution-instance" {
-                if method == salvo::http::Method::GET {
-                    return Ok(
-                        json!({"executionInstance":domain.execution_instance(&principal,parts[5],now_ms()).await?}),
-                    );
-                }
-                if method == salvo::http::Method::PUT {
-                    let body: crate::domain::SetExecutionInstance = req
-                        .parse_json()
-                        .await
-                        .map_err(|_| Error::Invalid("invalid_arguments"))?;
-                    return Ok(
-                        json!({"executionInstance":domain.set_execution_instance(&principal,parts[5],body,now_ms()).await?}),
-                    );
-                }
+            if parts.len() == 7
+                && parts[4] == "agents"
+                && parts[6] == "execution-device"
+                && method == salvo::http::Method::PUT
+            {
+                let principal = self.store.authenticate(&credential, now_ms(), true).await?;
+                let body: crate::domain::SetExecutionDevice = req
+                    .parse_json()
+                    .await
+                    .map_err(|_| Error::Invalid("invalid_arguments"))?;
+                return Ok(
+                    json!({"agent":domain.set_execution_device(&principal,parts[5],body,now_ms()).await?}),
+                );
             }
 
             if parts.len() == 7

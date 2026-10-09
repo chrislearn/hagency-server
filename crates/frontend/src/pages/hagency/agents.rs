@@ -1,6 +1,8 @@
 use super::common::*;
+use crate::components::ui::icons::Icon;
 use dioxus::prelude::*;
 use serde_json::{Value, json};
+
 #[component]
 pub fn Agents() -> Element {
     let mut agents = use_resource(|| async {
@@ -8,100 +10,173 @@ pub fn Agents() -> Element {
             .await
             .map_err(|e| e.message)
     });
-    let mut selected = use_signal(String::new);
-    let mut bindings = use_resource(move || async move {
-        let id = selected();
-        if id.is_empty() {
-            return Ok(json!({"bindings":[]}));
-        }
-        browser_auth::call(&format!("/agents/{id}/bindings"), "GET", None)
+    let mut devices = use_resource(|| async {
+        browser_auth::call("/devices", "GET", None)
             .await
             .map_err(|e| e.message)
     });
-    let mut message = use_signal(String::new);
-    let mut busy = use_signal(|| false);
-    let mut name = use_signal(String::new);
+    let projects = use_resource(|| async {
+        browser_auth::call("/projects", "GET", None)
+            .await
+            .map_err(|e| e.message)
+    });
+    let mut selected = use_signal(String::new);
     let mut project = use_signal(String::new);
     let mut room = use_signal(String::new);
     let mut command = use_signal(browser_auth::operation_id);
+    let mut message = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+    let mut bindings = use_resource(move || {
+        let id = selected();
+        async move {
+            let result = if id.is_empty() {
+                Ok(json!({"bindings":[]}))
+            } else {
+                browser_auth::call(&format!("/agents/{id}/bindings"), "GET", None)
+                    .await
+                    .map_err(|e| e.message)
+            };
+            (id, result)
+        }
+    });
+    let rooms = use_resource(move || {
+        let id = project();
+        async move {
+            let result = if id.is_empty() {
+                Ok(json!({"rooms":[]}))
+            } else {
+                browser_auth::call(&format!("/projects/{id}/rooms"), "GET", None)
+                    .await
+                    .map_err(|e| e.message)
+            };
+            (id, result)
+        }
+    });
     let data = agents().and_then(Result::ok).unwrap_or(Value::Null);
-    rsx! {div{class:"hg-page hg-stack",
-        h1{class:"text-2xl font-bold","My agents"}
-        p{"You permanently own every agent you create. Your local hagency-client runs Codex and controls resource quotas and tool permissions."}
-        Notice{message}
-        button{class:"hg-button",onclick:move|_|{agents.restart();bindings.restart();},"Refresh"}
-        if let Some(Err(error))=agents(){p{role:"alert","{error}"}}
-        for agent in rows(&data,"agents") {
-            div{class:"hg-card hg-stack",key:"{agent}",
-                strong{{text(&agent,"displayName")}} code{{text(&agent,"puppetMxid")}}
-                p{{format!("State: {}",agent["state"])}}
-                button{class:"hg-button",onclick:move|_|{selected.set(text(&agent,"id"));command.set(browser_auth::operation_id());},"Select agent"}
+    let device_data = devices().and_then(Result::ok).unwrap_or(Value::Null);
+    let binding_data = bindings()
+        .filter(|(id, _)| *id == selected())
+        .and_then(|(_, r)| r.ok())
+        .unwrap_or(Value::Null);
+    let room_data = rooms()
+        .filter(|(id, _)| *id == project())
+        .and_then(|(_, r)| r.ok())
+        .unwrap_or(Value::Null);
+    let active_agent = rows(&data, "agents")
+        .into_iter()
+        .find(|a| text(a, "id") == selected());
+    rsx! {div {class:"hg-page hg-stack",
+        div {class:"hg-heading", h1 {"My Agents"}
+            button {class:"hg-button hg-secondary", disabled:busy(), onclick:move |_| {agents.restart();devices.restart();bindings.restart();},"Refresh"}
+        }
+        p {class:"hg-note", "Agents belong to your account across the server. Use Hagency Desktop to create an Agent, assign its execution device, configure its model and resources, and start responding."}
+        Notice {message}
+        if agents().is_none() {p {role:"status","Loading Agents…"}}
+        if let Some(Err(error))=agents() {p {role:"alert","{error}"}}
+        if let Some(Err(error))=devices() {p {role:"alert","Unable to load execution devices: {error}"}}
+        if agents().is_some_and(|r|r.is_ok())&&rows(&data,"agents").is_empty() {div {class:"hg-card hg-stack",h2 {"No Agents yet"}p {"Create an Agent in Hagency Desktop. It is assigned to that device and gets a private chat with you automatically."}}}
+        div {class:"hg-grid",
+            for agent in rows(&data,"agents") {
+                {let id=text(&agent,"id");let device_id=text(&agent,"executionDeviceId");let device=rows(&device_data,"devices").into_iter().find(|d|text(d,"id")==device_id);
+                rsx! {section {class:"hg-card hg-stack",key:"{id}",
+                    div {class:"hg-heading",h2 {{text(&agent,"displayName")}}span {class:"hg-badge",{text(&agent,"state")}}}
+                    p {class:"hg-note",{match device {Some(d)=>format!("Execution device: {}{}",text(&d,"name"),if d["revoked"]==true {" (authorization revoked)"}else{""}),None if device_id.is_empty()=>"No execution device assigned".into(),None=>format!("Execution device: {device_id}")}}}
+                    details {summary {"Matrix identity"}code {{text(&agent,"puppetMxid")}}}
+                    div {class:"hg-actions",button {class:"hg-button hg-secondary",disabled:busy(),onclick:move |_| {selected.set(id.clone());project.set(String::new());room.set(String::new());message.set(String::new());command.set(browser_auth::operation_id());},"Manage Agent"}}
+                }}}
             }
         }
-        form{class:"hg-card hg-stack",onsubmit:move|e|{
-            e.prevent_default();if busy(){return;}let id=selected();let body=command_body(&id,&name(),&project(),&room(),&command());
-            let path=if id.is_empty(){"/agents".into()}else{format!("/agents/{id}/bindings")};busy.set(true);
-            spawn(async move{match mutate(&path,"POST",body).await{
-                Ok(result)=>{message.set(result);command.set(browser_auth::operation_id());agents.restart();bindings.restart();},Err(e)=>message.set(e)}busy.set(false);});
-        },h2{if selected().is_empty(){"Create an agent"}else{"Add a Room binding"}}
-            if selected().is_empty(){p{"Create a global agent identity first. It has no Project or Room until you choose a separate binding. Your local hagency-client selects its execution device and controls the runtime."}}
-            else {
-                p{"Join the Space and Room first. Register the Room in the Project and invite the Hagency service account so it can invite the puppet. Encrypted Rooms wait for client crypto support."}
-                label{"Project ID" input{class:"hg-input",required:true,value:project(),oninput:move|e|{project.set(e.value());command.set(browser_auth::operation_id());}}}
-                label{"Room ID" input{class:"hg-input",required:true,value:room(),oninput:move|e|{room.set(e.value());command.set(browser_auth::operation_id());}}}
-            }
-            if selected().is_empty(){label{"Agent name" input{class:"hg-input",required:true,value:name(),oninput:move|e|{name.set(e.value());command.set(browser_auth::operation_id());}}}}
-            button{class:"hg-button",disabled:busy(),r#type:"submit",if selected().is_empty(){"Create agent"}else{"Bind Room"}}
-            if !selected().is_empty(){button{class:"hg-link",r#type:"button",onclick:move|_|{selected.set(String::new());command.set(browser_auth::operation_id());},"Create a different agent"}}
-        }
-        if !selected().is_empty(){div{class:"hg-card hg-stack",h2{"Selected agent"}code{"{selected}"}
-            for action in ["pause","resume"]{button{class:"hg-button",disabled:busy(),onclick:move|_|{let id=selected();busy.set(true);spawn(async move{match mutate(&format!("/agents/{id}/{action}"),"POST",json!({})).await{Ok(_)=>{message.set(format!("Agent {action} accepted."));agents.restart();},Err(e)=>message.set(e)}busy.set(false);});},"{action}"}}
-            if let Some(Err(error))=bindings(){p{role:"alert","{error}"}}
-            for binding in rows(&bindings().and_then(Result::ok).unwrap_or(Value::Null),"bindings"){
-                div{class:"hg-card",code{{text(&binding,"roomId")}}p{{if binding["scopeKind"]=="owner_direct"{format!("Owner direct; state {}",binding["state"])}else{format!("Project {}; state {}",binding["projectId"],binding["state"])}}}
-                    for action in ["pause","resume","leave"]{
-                        {let binding_id={text(&binding,"id")};rsx!{button{class:"hg-button",disabled:busy(),onclick:move|_|{
-                            let id=binding_id.clone();busy.set(true);spawn(async move{let (path,method)=if action=="leave"{(format!("/bindings/{id}"),"DELETE")}else{(format!("/bindings/{id}/{action}"),"POST")};
-                            match mutate(&path,method,json!({})).await{Ok(_)=>{message.set(format!("Binding {action} accepted."));bindings.restart();},Err(e)=>message.set(e)}busy.set(false);});
-                        },"{action}"}}}
+        if let Some(agent)=active_agent {
+            section {class:"hg-card hg-stack",h2 {{text(&agent,"displayName")}}
+                p {class:"hg-note", "Server availability controls all of this Agent’s bindings. It does not start or stop the model on its device. Binding state does not prove the device is online."}
+                if let Some(action)=availability_action(&text(&agent,"state")) {
+                    div {class:"hg-actions",button {class:"hg-button",disabled:busy(),onclick:move |_| {
+                        let id=selected();busy.set(true);spawn(async move {match mutate(&format!("/agents/{id}/{action}"),"POST",json!({})).await {
+                            Ok(_)=>{message.set(if action=="pause" {"Agent paused on the server."}else{"Agent available on the server. Its device must also be running."}.into());agents.restart();bindings.restart();},Err(e)=>message.set(e)
+                        }busy.set(false);});
+                    },Icon {name:if action=="pause" {"pause".to_string()}else{"play".to_string()},class:"h-4 w-4".to_string()},if action=="pause" {"Pause Agent"}else {"Restore availability"}}}
+                }
+                h3 {"Connected chats"}
+                if let Some((id,Err(error)))=bindings() {if id==selected(){p {role:"alert","{error}"}}}
+                if binding_data.is_null() {p {role:"status","Loading chats…"}}
+                for binding in rows(&binding_data,"bindings") {
+                    {let id=text(&binding,"id");let is_direct=binding["scopeKind"]=="owner_direct";
+                    rsx! {div {class:"hg-card hg-stack",key:"{id}",
+                        h3 {if is_direct {"Private chat with you"}else {"Project Room"}}
+                        code {{text(&binding,"roomId")}}
+                        p {class:"hg-note",{format!("Server binding: {}",text(&binding,"state"))}}
+                        div {class:"hg-actions",
+                            if let Some(action)=binding_action(&text(&binding,"state")) {
+                                {let id=id.clone();rsx! {button {class:"hg-button hg-secondary",disabled:busy(),onclick:move |_| {
+                                    let id=id.clone();busy.set(true);spawn(async move {match mutate(&format!("/bindings/{id}/{action}"),"POST",json!({})).await {
+                                        Ok(result)=>{message.set(result);bindings.restart();},Err(e)=>message.set(e)
+                                    }busy.set(false);});
+                                },Icon {name:if action=="pause" {"pause".to_string()}else{"play".to_string()},class:"h-4 w-4".to_string()},if action=="pause" {"Pause in this chat"}else {"Resume in this chat"}}}}
+                            }
+                            if !is_direct&&text(&binding,"state")!="left" {
+                                button {class:"hg-button hg-secondary",disabled:busy(),onclick:move |_| {
+                                    let id=id.clone();busy.set(true);spawn(async move {match mutate(&format!("/bindings/{id}"),"DELETE",json!({})).await {Ok(result)=>{message.set(result);bindings.restart();},Err(e)=>message.set(e)}busy.set(false);});
+                                },"Leave Room"}
+                            }
+                        }
+                    }}}
+                }
+                details {summary {"Add to a Project Room"}
+                    form {class:"hg-stack",onsubmit:move |e| {
+                        e.prevent_default();if busy()||room().is_empty()||project().is_empty(){return;}
+                        let id=selected();let body=binding_body(&project(),&room(),&command());busy.set(true);
+                        spawn(async move {match mutate(&format!("/agents/{id}/bindings"),"POST",body).await {
+                            Ok(result)=>{message.set(result);command.set(browser_auth::operation_id());bindings.restart();},Err(e)=>message.set(e)
+                        }busy.set(false);});
+                    },
+                        p {class:"hg-note", "You must belong to both the Space and Room, and their Agent access policies must allow you. The Hagency service account needs permission to invite the Agent. Encrypted Rooms are not yet supported for Agents."}
+                        if let Some(Err(error))=projects() {p {role:"alert","{error}"}}
+                        label {class:"hg-field","Project" select {class:"hg-input",disabled:busy(),value:project(),onchange:move |e| {project.set(e.value());room.set(String::new());command.set(browser_auth::operation_id());},
+                            option {value:"","Select a Project"}
+                            for item in rows(&projects().and_then(Result::ok).unwrap_or(Value::Null),"projects") {option {value:text(&item,"id"),{name(&item,"spaceId")}}}
+                        }}
+                        if let Some((id,Err(error)))=rooms() {if id==project(){p {role:"alert","{error}"}}}
+                        label {class:"hg-field","Room" select {class:"hg-input",disabled:busy()||project().is_empty(),value:room(),onchange:move |e| {room.set(e.value());command.set(browser_auth::operation_id());},
+                            option {value:"","Select a registered Room"}
+                            for item in rows(&room_data,"rooms") {option {value:text(&item,"roomId"),{name(&item,"roomId")}}}
+                        }}
+                        div {class:"hg-actions",button {class:"hg-button",disabled:busy()||room().is_empty(),r#type:"submit","Add Agent"}}
                     }
                 }
+                div {class:"hg-actions",button {class:"hg-button hg-secondary",disabled:busy(),onclick:move |_| selected.set(String::new()),"Done"}}
             }
-        }}
+        }
     }}
 }
-
-fn command_body(selected: &str, name: &str, project: &str, room: &str, key: &str) -> Value {
-    if selected.is_empty() {
-        json!({"displayName":name.trim(),"idempotencyKey":key})
-    } else {
-        json!({"projectId":project.trim(),"roomId":room.trim(),"idempotencyKey":key})
+fn availability_action(state: &str) -> Option<&'static str> {
+    match state {
+        "active" => Some("pause"),
+        "suspended" => Some("resume"),
+        _ => None,
     }
+}
+fn binding_action(state: &str) -> Option<&'static str> {
+    availability_action(state)
+}
+fn binding_body(project: &str, room: &str, key: &str) -> Value {
+    json!({"projectId":project.trim(),"roomId":room.trim(),"idempotencyKey":key})
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn browser_global_agent_creation_does_not_depend_on_stale_room_fields() {
+    fn browser_binding_request_contains_only_room_scope_and_original_key() {
         assert_eq!(
-            command_body(
-                "",
-                " New agent ",
-                "stale project",
-                "stale room",
-                "create-key"
-            ),
-            json!({"displayName":"New agent","idempotencyKey":"create-key"})
-        );
-        assert_eq!(
-            command_body(
-                "agt_existing",
-                "ignored old name",
-                " prj_owned ",
-                " !discussion:server ",
-                "bind-key"
-            ),
+            binding_body(" prj_owned ", " !discussion:server ", "bind-key"),
             json!({"projectId":"prj_owned","roomId":"!discussion:server","idempotencyKey":"bind-key"})
         );
+    }
+    #[test]
+    fn creating_and_retired_agents_cannot_be_resumed_from_web() {
+        assert_eq!(availability_action("active"), Some("pause"));
+        assert_eq!(availability_action("suspended"), Some("resume"));
+        for state in ["creating", "retired", "joining", "left", ""] {
+            assert_eq!(availability_action(state), None);
+        }
     }
 }

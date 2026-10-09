@@ -51,22 +51,30 @@ pub fn RoomDiscovery(project_id: Signal<String>, room: Signal<String>) -> Elemen
         .filter(|(project, selected, _)| *project == project_id() && *selected == room())
         .and_then(|(_, _, v)| v.ok())
         .unwrap_or(Value::Null);
-    rsx! {section { class:"hg-card hg-stack",
-        h2 { "My Rooms and their Agents" }
-        p { "Only registered child Rooms you currently belong to are listed. Space membership does not grant private Room membership. A Room member may view its Agent roster without joining the Space." }
-        button { class:"hg-button",disabled:project_id().is_empty(),onclick:move|_|{rooms.restart();agents.restart();},"Refresh Rooms and roster" }
-        if let Some((project,Err(error)))=rooms() { if project==project_id() {p{role:"alert","{error}"}} }
-        for item in rows(&data,"rooms") {div { class:"hg-stack",key:"{item}",
-            code {{text(&item,"roomId")}}
-            button {class:"hg-button",onclick:move|_|room.set(text(&item,"roomId")),"Select Room"}
-        }}
-        if !room().is_empty() {p{{format!("Selected Room: {}",room())}}}
-        if let Some((project,selected,Err(error)))=agents() {if project==project_id()&&selected==room(){p{role:"alert","{error}"}}}
-        for agent in rows(&roster,"agents") {div{class:"hg-stack",key:"{agent}",
-            strong {{text(&agent,"displayName")}}
-            code {{text(&agent,"puppetMxid")}}
-            p {{format!("Creator: {}; binding: {}",text(&agent,"ownerMxid"),text(&agent,"bindingState"))}}
-        }}
-        p {class:"hg-note","Binding state is not proof that the creator’s device or model is currently online. Agent ownership is permanent; this view does not grant administration rights."}
+    rsx! {section {class:"hg-card hg-stack",
+        div {class:"hg-heading", h2 {"Rooms"}
+            button {class:"hg-button hg-secondary",disabled:project_id().is_empty(),onclick:move |_| {rooms.restart();agents.restart();},"Refresh"}
+        }
+        if rooms().is_none() {p {role:"status","Loading Rooms…"}}
+        if let Some((project,Err(error)))=rooms() {if project==project_id() {p {role:"alert","{error}"}}}
+        if !data.is_null()&&rows(&data,"rooms").is_empty() {p {class:"hg-note","No registered Rooms you currently belong to."}}
+        if !rows(&data,"rooms").is_empty() {
+            label {class:"hg-field","Room" select {class:"hg-input",value:room(),onchange:move |e| room.set(e.value()),
+                option {value:"","Select a Room"}
+                for item in rows(&data,"rooms") {option {value:text(&item,"roomId"),{name(&item,"roomId")}}}
+            }}
+        }
+        if !room().is_empty() {
+            h3 {"Agents in this Room"}
+            if agents().is_none() {p {role:"status","Loading Agents…"}}
+            if let Some((project,selected,Err(error)))=agents() {if project==project_id()&&selected==room() {p {role:"alert","{error}"}}}
+            if !roster.is_null()&&rows(&roster,"agents").is_empty() {p {class:"hg-note","No visible Agents in this Room."}}
+            for agent in rows(&roster,"agents") {div {class:"hg-stack",key:"{agent}",
+                strong {{text(&agent,"displayName")}}
+                p {class:"hg-note",{format!("Owner: {} · Binding: {}",text(&agent,"ownerMxid"),text(&agent,"bindingState"))}}
+                details {summary {"Matrix identity"}code {{text(&agent,"puppetMxid")}}}
+            }}
+        }
+        p {class:"hg-note","Only joined, registered Rooms are shown. Binding state does not indicate whether an Agent’s device is online."}
     }}
 }

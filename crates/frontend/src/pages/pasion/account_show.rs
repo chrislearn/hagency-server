@@ -60,7 +60,7 @@ impl PendingAction {
     fn description(&self, username: &str) -> String {
         match self {
             Self::Promote => format!(
-                "{username} will be able to request the admin scope and manage this deployment through padmin."
+                "{username} will be able to request the admin scope and manage this deployment through Hagency Server."
             ),
             Self::Demote => format!(
                 "{username} will lose administrator access immediately: existing admin sessions stop working and the homeserver admin flag is revoked too."
@@ -444,7 +444,7 @@ pub fn PasionAccountShowPage(user_id: String) -> Element {
                     CardHeader {
                         CardTitle { "Administrator" }
                         CardDescription {
-                            "Only admins can obtain admin scopes and sign in to padmin. This role is mirrored onto the homeserver admin flag."
+                            "Grants server administration, not ownership of other users’ Agents or Space/Room permissions. Regular users can still sign in to manage their own Projects and Agents."
                         }
                     }
                     CardContent { class: "flex items-center justify-between gap-4".to_string(),

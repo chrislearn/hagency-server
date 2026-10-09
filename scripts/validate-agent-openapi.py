@@ -169,6 +169,8 @@ def validate(doc):
                 require(set(security) <= set(doc['components']['securitySchemes']), 'security scheme missing')
             if path.startswith('/api/hagency/v1/execution/'):
                 require(operation['security'] == [{'deviceBearer': []}] and method == 'post', 'execution bearer/method drift')
+            elif (path == '/api/hagency/v1/agents' and method == 'post') or (path == '/api/hagency/v1/agents/{agentId}/execution-device' and method == 'put'):
+                require(operation['security'] == [{'deviceBearer': []}], 'device management security drift')
             elif path.startswith('/api/hagency/v1/') and path not in ['/api/hagency/v1/discovery', '/api/hagency/v1/readiness', '/api/hagency/v1/sessions/pasion']:
                 require(operation['security'] == [{'userBearer': []}], 'owner session security drift')
     for schema in doc['components']['schemas'].values():
@@ -202,6 +204,10 @@ class GuardTests(unittest.TestCase):
         self.rejection(lambda d: d['paths']['/api/hagency/v1/execution/events/ack'].update(get=d['paths']['/api/hagency/v1/execution/events/ack'].pop('post')))
     def test_wrong_bearer(self):
         self.rejection(lambda d: d['paths']['/api/hagency/v1/execution/events/start']['post'].update(security=[{'userBearer': []}]))
+    def test_create_requires_current_device(self):
+        self.rejection(lambda d: d['paths']['/api/hagency/v1/agents']['post'].update(security=[{'userBearer': []}]))
+    def test_assign_requires_current_device(self):
+        self.rejection(lambda d: d['paths']['/api/hagency/v1/agents/{agentId}/execution-device']['put'].update(security=[{'userBearer': []}]))
     def test_private_or_missing_field(self):
         self.rejection(lambda d: d['components']['schemas']['ReplyIntent']['properties'].update(workerToken={'type': 'string'}))
     def test_rust_type_drift(self):

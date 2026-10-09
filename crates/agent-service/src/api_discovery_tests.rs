@@ -3,8 +3,8 @@ use crate::{
     domain::{AdminFacts, CreateBoundAgent, DomainStore, RoomFacts},
     gateway::Gateway,
     identity::{Identity, Verifier},
-    store::{Principal, Store},
     secret_token,
+    store::{Principal, Store},
 };
 use salvo::{
     Service,
@@ -45,6 +45,21 @@ async fn user(store: &Store, name: &str) -> (String, Principal) {
         .unwrap();
     let p = store
         .authenticate(&grant.token, now_ms(), false)
+        .await
+        .unwrap();
+    let device = store
+        .register_device(
+            &grant.token,
+            crate::store::RegisterDevice {
+                installation_id: format!("create-{}", p.user_id),
+                name: "Creation device".into(),
+            },
+            crate::api::now_ms(),
+        )
+        .await
+        .unwrap();
+    let p = store
+        .authenticate(&device.token, crate::api::now_ms(), true)
         .await
         .unwrap();
     (grant.token, p)
@@ -654,7 +669,11 @@ async fn readiness_guard_exercise(url: &str) {
     ] {
         let mut response = TestClient::post(format!("https://example.test{path}"))
             .add_header("host", "example.test", true)
-            .bearer_auth(&credential)
+            .bearer_auth(if path == "/api/hagency/v1/agents" {
+                &device.token
+            } else {
+                &credential
+            })
             .json(body)
             .send(&service)
             .await;
@@ -664,6 +683,17 @@ async fn readiness_guard_exercise(url: &str) {
             "appservice_startup_not_ready"
         );
     }
+    let response = TestClient::post("https://example.test/api/hagency/v1/agents")
+        .add_header("host", "example.test", true)
+        .bearer_auth(&credential)
+        .json(&create)
+        .send(&service)
+        .await;
+    assert_eq!(
+        response.status_code,
+        Some(StatusCode::UNAUTHORIZED),
+        "a user session cannot select an execution device for creation"
+    );
     let response = TestClient::post("https://example.test/api/hagency/v1/agents")
         .add_header("host", "example.test", true)
         .bearer_auth("not-a-real-session")
@@ -750,7 +780,11 @@ async fn readiness_guard_exercise(url: &str) {
     ] {
         let mut response = TestClient::post(format!("https://example.test{path}"))
             .add_header("host", "example.test", true)
-            .bearer_auth(&credential)
+            .bearer_auth(if path == "/api/hagency/v1/agents" {
+                &device.token
+            } else {
+                &credential
+            })
             .json(body)
             .send(&service)
             .await;
@@ -792,31 +826,59 @@ async fn readiness_guard_exercise(url: &str) {
         StatusCode::OK,
     )
     .await;
-    assert_eq!(devices["devices"][0]["id"], device.device_id);
+    assert!(
+        devices["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["id"] == device.device_id)
+    );
     assert!(devices["devices"][0].get("token").is_none());
-    let instance_path = format!(
-        "/api/hagency/v1/agents/{}/execution-instance",
+    let _transport =
+        crate::transport::TransportStore::open(url, crate::transport::Limits::default())
+            .await
+            .unwrap();
+    let device_path = format!(
+        "/api/hagency/v1/agents/{}/execution-device",
         existing.agent.id
     );
-    assert!(
-        get(&service, &instance_path, &credential, StatusCode::OK).await["executionInstance"]
-            .is_null()
-    );
-    let mut response = TestClient::put(format!("https://example.test{instance_path}"))
-        .add_header("host", "example.test", true).bearer_auth(&credential)
-        .json(&json!({"deviceId":device.device_id,"name":"designated execution","expectedGeneration":0}))
-        .send(&service).await;
-    assert_eq!(response.status_code, Some(StatusCode::OK));
-    let instance = response.take_json::<Value>().await.unwrap()["executionInstance"].clone();
-    assert_eq!(instance["deviceId"], device.device_id);
-    assert_eq!(instance["generation"], 1);
-    let response = TestClient::put(format!("https://example.test{instance_path}"))
+    let response = TestClient::put(format!("https://example.test{device_path}"))
         .add_header("host", "example.test", true)
         .bearer_auth(&credential)
-        .json(&json!({"deviceId":device.device_id,"name":"stale write","expectedGeneration":0}))
+        .json(&json!({"expectedGeneration":existing.agent.generation}))
+        .send(&service)
+        .await;
+    assert_eq!(
+        response.status_code,
+        Some(StatusCode::UNAUTHORIZED),
+        "assignment requires the current device credential"
+    );
+    let mut response = TestClient::put(format!("https://example.test{device_path}"))
+        .add_header("host", "example.test", true)
+        .bearer_auth(&device.token)
+        .json(&json!({"expectedGeneration":existing.agent.generation}))
+        .send(&service)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let assigned = response.take_json::<Value>().await.unwrap()["agent"].clone();
+    assert_eq!(assigned["executionDeviceId"], device.device_id);
+    let response = TestClient::put(format!("https://example.test{device_path}"))
+        .add_header("host", "example.test", true)
+        .bearer_auth(&device.token)
+        .json(&json!({"expectedGeneration":existing.agent.generation}))
         .send(&service)
         .await;
     assert_eq!(response.status_code, Some(StatusCode::CONFLICT));
+    get(
+        &service,
+        &format!(
+            "/api/hagency/v1/agents/{}/execution-instance",
+            existing.agent.id
+        ),
+        &credential,
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
     let direct_path = format!("/api/hagency/v1/agents/{}/owner-direct", existing.agent.id);
     let direct = get(&service, &direct_path, &credential, StatusCode::OK).await;
     assert!(direct["ownerDirectRoomId"].is_null() && direct["binding"].is_null());
@@ -867,7 +929,7 @@ async fn postgres_public_discovery_identifies_hagency_without_granting_authority
     let value = reply.take_json::<Value>().await.unwrap();
     assert_eq!(value["product"], "hagency-server");
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(value["protocolVersion"], 2);
+    assert_eq!(value["protocolVersion"], 3);
     assert_eq!(value["homeserver"], "https://example.test/");
     assert_eq!(value["issuer"], "https://example.test/_pasion/");
     assert_eq!(
@@ -879,8 +941,9 @@ async fn postgres_public_discovery_identifies_hagency_without_granting_authority
             "device-execution-v1",
             "execution-history-v1",
             "global-agent-identity-v2",
-            "execution-instance-v1",
-            "owner-direct-v1"
+            "execution-device-v1",
+            "owner-direct-v1",
+            "processing-reaction-v1"
         ])
     );
     assert!(value.get("token").is_none());

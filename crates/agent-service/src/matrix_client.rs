@@ -181,6 +181,27 @@ impl MatrixClient {
         transaction: &str,
         content: Value,
     ) -> Result<String> {
+        self.send_typed(puppet, room, transaction, "m.room.message", content)
+            .await
+    }
+    pub(crate) async fn send_processing(
+        &self,
+        puppet: &str,
+        room: &str,
+        transaction: &str,
+        content: Value,
+    ) -> Result<String> {
+        self.send_typed(puppet, room, transaction, "m.reaction", content)
+            .await
+    }
+    async fn send_typed(
+        &self,
+        puppet: &str,
+        room: &str,
+        transaction: &str,
+        event_type: &str,
+        content: Value,
+    ) -> Result<String> {
         let response = self
             .call(
                 Method::PUT,
@@ -191,7 +212,7 @@ impl MatrixClient {
                     "rooms",
                     room,
                     "send",
-                    "m.room.message",
+                    event_type,
                     transaction,
                 ],
                 puppet,

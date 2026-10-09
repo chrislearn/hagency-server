@@ -16,7 +16,10 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, SimpleAsyncC
 async fn postgres_unavailable_room_does_not_starve_routing_or_unknown_replies() {
     // This test runs real global worker scans, so isolate it from parallel tests.
     let source = std::env::var("HAGENCY_AGENT_TEST_DATABASE_URL").unwrap();
-    let name = format!("hagency_fair_{}", &crate::hash(&crate::secret_token())[..16]);
+    let name = format!(
+        "hagency_fair_{}",
+        &crate::hash(&crate::secret_token())[..16]
+    );
     let mut control = AsyncPgConnection::establish(&source).await.unwrap();
     control
         .batch_execute(&format!("CREATE DATABASE {name}"))
@@ -56,7 +59,18 @@ async fn exercise(url: &str) {
         )
         .await
         .unwrap();
-    let owner = auth.authenticate(&grant.token, now, false).await.unwrap();
+    let initial = auth
+        .register_device(
+            &grant.token,
+            RegisterDevice {
+                installation_id: "fair-device".into(),
+                name: "Fixture".into(),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    let owner = auth.authenticate(&initial.token, now, true).await.unwrap();
     let space = "!space:example.test";
     let bad = "!unavailable:example.test";
     let good = "!healthy:example.test";
@@ -245,19 +259,6 @@ async fn exercise(url: &str) {
         .await
         .unwrap();
     let p = auth.authenticate(&device.token, now, true).await.unwrap();
-    domain
-        .set_execution_instance(
-            &owner,
-            &created.agent.id,
-            crate::domain::SetExecutionInstance {
-                device_id: p.device_id.clone().unwrap(),
-                name: "Worker test".into(),
-                expected_generation: 0,
-            },
-            now,
-        )
-        .await
-        .unwrap();
     let lease = transport
         .acquire_for_test(&p, &created.agent.id, 60_000, false, now)
         .await
@@ -283,6 +284,7 @@ async fn exercise(url: &str) {
         encrypted: false,
     };
     let mut healthy_reply = None;
+    let mut healthy_processing = None;
     for i in 0..22 {
         let (room, binding) = if i == 21 {
             (good, &bound.binding.id)
@@ -312,6 +314,14 @@ async fn exercise(url: &str) {
             .start_execution(&p, &lease_ref, &dispatch, &exec, &facts, now_ms())
             .await
             .unwrap();
+        if i == 21 {
+            healthy_processing = Some(
+                transport
+                    .mark_processing(&p, &lease_ref, &dispatch, &exec, &facts, now_ms())
+                    .await
+                    .unwrap(),
+            );
+        }
         let reply = transport
             .submit_reply(
                 &p,
@@ -420,6 +430,46 @@ async fn exercise(url: &str) {
     );
     let held = sql_query("SELECT count(*) AS n FROM hagency_agent_v1.reply_outbox WHERE id=$1 AND delivery_blocked AND state='unknown' AND matrix_txn_id=$2 AND body=$3")
         .bind::<Text,_>(&original.id).bind::<Text,_>(&original.matrix_txn_id).bind::<Text,_>(&original.body).get_result::<Count>(&mut db).await.unwrap();
+    assert_eq!(held.n, 1);
+    let processing = healthy_processing.unwrap();
+    let mut processing_cursor = String::new();
+    send_processing(&transport, &gateway, &matrix, &mut processing_cursor)
+        .await
+        .unwrap();
+    let reaction = transport
+        .processing_candidates("", 100, now_ms())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == processing.id)
+        .unwrap();
+    assert_eq!(reaction.state, "unknown");
+    let txn = reaction.matrix_txn_id.clone();
+    let content = reaction.content.clone();
+    assert_eq!(
+        content,
+        json!({"m.relates_to":{"rel_type":"m.annotation","event_id":"$reply21","key":"\u{1f440}"}})
+    );
+    for _ in 0..4 {
+        send_processing(&transport, &gateway, &denied_matrix, &mut processing_cursor)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        calls.as_ref().load(Ordering::SeqCst),
+        2,
+        "processing 403 is held and never blindly resent"
+    );
+    assert!(
+        transport
+            .processing_candidates("", 100, now_ms())
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| r.id != processing.id)
+    );
+    let held=sql_query("SELECT count(*) AS n FROM hagency_agent_v1.processing_outbox WHERE id=$1 AND state='unknown' AND delivery_blocked AND matrix_txn_id=$2 AND content=$3")
+        .bind::<Text,_>(&processing.id).bind::<Text,_>(txn).bind::<Jsonb,_>(content).get_result::<Count>(&mut db).await.unwrap();
     assert_eq!(held.n, 1);
     server.abort();
     let _ = server.await;

@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS hagency_agent_v1.domain_deployment (
  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
- version integer NOT NULL CHECK(version=2),
+ version integer NOT NULL CHECK(version=4),
  namespace text NOT NULL
 );
 CREATE TABLE IF NOT EXISTS hagency_agent_v1.projects (
@@ -15,7 +15,9 @@ CREATE TABLE IF NOT EXISTS hagency_agent_v1.rooms (
 );
 CREATE TABLE IF NOT EXISTS hagency_agent_v1.agents (
  id text PRIMARY KEY, owner_user_id text NOT NULL REFERENCES hagency_agent_v1.users(id),
- puppet_mxid text NOT NULL UNIQUE, display_name text NOT NULL,
+ puppet_mxid text NOT NULL UNIQUE, execution_device_id text,
+ FOREIGN KEY(execution_device_id,owner_user_id) REFERENCES hagency_agent_v1.devices(id,user_id),
+ display_name text NOT NULL,
  state text NOT NULL CHECK(state IN ('creating','active','suspended','retiring','retired')),
  generation bigint NOT NULL DEFAULT 1 CHECK(generation>0),
  owner_direct_room_id text UNIQUE, UNIQUE(id,owner_user_id)
@@ -29,6 +31,7 @@ CREATE TABLE IF NOT EXISTS hagency_agent_v1.bindings (
  generation bigint NOT NULL DEFAULT 1 CHECK(generation>0),
  admin_project_paused boolean NOT NULL DEFAULT false,
  admin_room_paused boolean NOT NULL DEFAULT false,
+ owner_service_paused boolean NOT NULL DEFAULT false,
  UNIQUE(agent_id,room_id),
  FOREIGN KEY(room_id,project_id) REFERENCES hagency_agent_v1.rooms(room_id,project_id)
 );
@@ -52,6 +55,7 @@ BEGIN
  IF NEW.id<>OLD.id OR NEW.owner_user_id<>OLD.owner_user_id OR NEW.puppet_mxid<>OLD.puppet_mxid THEN
   RAISE EXCEPTION 'immutable_agent_identity';
  END IF;
+ IF NEW.generation<OLD.generation OR (NEW.execution_device_id IS DISTINCT FROM OLD.execution_device_id AND NEW.generation<=OLD.generation) THEN RAISE EXCEPTION 'execution_device_generation_required'; END IF;
  IF OLD.state='retired' AND NEW.state<>'retired' THEN RAISE EXCEPTION 'permanent_retirement'; END IF;
  IF OLD.state='retiring' AND NEW.state NOT IN ('retiring','retired') THEN RAISE EXCEPTION 'permanent_retirement'; END IF;
  RETURN NEW;

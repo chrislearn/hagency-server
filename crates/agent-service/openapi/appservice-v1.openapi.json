@@ -3,13 +3,13 @@
   "info": {
     "title": "Hagency Matrix appservice receiver",
     "version": "1.0.0",
-    "description": "Mandatory installed AS homeserver\u2192Hagency interface. Authenticate with registration hs_token, never as_token or owner session/device token. Exact Bearer header or access_token query; if both present they must match; duplicate Authorization or duplicate query token rejected. Header preferred to avoid URL token logging. Matrix errors {errcode,error}: auth 403 M_FORBIDDEN, invalid 400 M_BAD_JSON, missing 404 M_NOT_FOUND, remaining M_UNKNOWN. AS acknowledgement is durable ingest; untrusted event contents are not authorization facts."
+    "description": "Mandatory installed AS homeserver→Hagency interface. Authenticate with registration hs_token, never as_token or owner session/device token. Exact Bearer header or access_token query; if both present they must match; duplicate Authorization or duplicate query token rejected. Header preferred to avoid URL token logging. Matrix errors {errcode,error}: auth 403 M_FORBIDDEN, invalid 400 M_BAD_JSON, missing 404 M_NOT_FOUND, remaining M_UNKNOWN. AS acknowledgement is durable ingest; untrusted event contents are not authorization facts."
   },
   "paths": {
     "/_matrix/app/v1/transactions/{transaction_id}": {
       "put": {
         "operationId": "acceptTransaction",
-        "description": "Commit canonical transaction digest, raw inbox and routing intent atomically before ACK. Same ID+same canonical content is idempotent; changed content conflicts. Durable ACK does not mean model execution or reply completion. Payload \u22642 MiB; pending queue defaults 10000 and 16 MiB; queue full returns 503 without ACK.",
+        "description": "Commit canonical transaction digest, raw inbox and routing intent atomically before ACK. Same ID+same canonical content is idempotent; changed content conflicts. Durable ACK does not mean model execution or reply completion. Payload ≤2 MiB; pending queue defaults 10000 and 16 MiB; queue full returns 503 without ACK.",
         "security": [
           {
             "homeserverBearer": []
@@ -115,7 +115,7 @@
     "/_matrix/app/v1/ping": {
       "post": {
         "operationId": "pingAppservice",
-        "description": "Connectivity only, not readiness roundtrip. Optional transaction_id; payload \u22644096 bytes.",
+        "description": "Connectivity only, not readiness roundtrip. Optional transaction_id; payload ≤4096 bytes.",
         "security": [
           {
             "homeserverBearer": []
