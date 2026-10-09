@@ -85,3 +85,6 @@ Detailed configuration, registration, local source development and migration:
 [English](docs/guide.md) · [中文](docs/guide.zh-CN.md).
 
 Hagency workflow architecture: [English](docs/OPERATIONS.md) · [中文](docs/OPERATIONS.zh-CN.md).
+
+Local operations: [connection/TLS diagnostics](docs/LOCAL_DEPLOYMENT.md) ·
+[isolated testing](docs/TESTING.md).

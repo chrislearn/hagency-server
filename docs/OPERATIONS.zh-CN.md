@@ -101,4 +101,14 @@ PostgreSQL runner 创建并删除专用随机测试库，不对现有业务库�
 脚本说明为准。历史 Fleet 的验证记录仅是历史证据，不代表当前兼容或支持。
 
 
-离线未开始请求的期限由 `queue.event_ttl_ms` 配置，默认 24 小时，范围 1 秒至 30 天，按可信 AS 入站时间计时，路由重试不延长。过期请求不能领取、ACK 或开始新的模型/工具动作；已开始任务的已知原结果仍须核验当前权限后结算及发送，unknown 与成本保留不自动释放。设备 poll 必须指定 `bindingId`，只领取明确启动的 Room。发现成员退出或关联失效后持久暂停受影响 binding 并递增 generation；重新加入不自动恢复，旧 dispatch 不因显式恢复复活。发送还核验傀儡当前 `m.room.message` power level；已观测撤权的旧回复不会在恢复权限后自动发送。
+离线未开始请求的期限由 `queue.event_ttl_ms` 配置，默认 24 小时，范围 1 秒至 30 天，按可信 AS 入站时间计时，路由重试不延长。过期请求不能领取、ACK 或开始新的模型/工具动作；已开始任务的已知原结果仍须核验当前权限后结算及发送，unknown 与成本保留不自动释放。设备 poll 必须指定 `bindingId`，只领取明确启动的 Room。发现所有者成员资格或关联失效、傀儡被移除后，撤销受影响 binding 并递增 generation，进入 leaving 并在确认实际退群后 left；重新加入不自动恢复，需显式重新绑定/采纳，旧 dispatch 不复活。发送还核验傀儡当前 `m.room.message` power level；已观测撤权的旧回复不会在恢复权限后自动发送。
+
+
+## 成员资格丢失与重新绑定
+
+所有者离开或 Space/Room 关系失效、Agent 被移除时，绑定递增 generation 并进入
+leaving，实际 Matrix 退群确认后成为 left。后台也检查 suspended；查询失败保留待定，
+不误判离开，被踢的 Agent 不自动重新 JOIN。恢复真实权限后需在确认 left 后显式
+重新绑定/采纳，主人私聊可重新采纳原 Room。普通服务暂停仍可 resume，与成员资格
+撤销不同；旧 dispatch 不复活，排队工作取消、已运行未知结果保留。详见
+[实现记录](design/2026-10-10-agent-owner-room-membership.zh-CN.md)。

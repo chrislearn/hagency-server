@@ -64,7 +64,7 @@ Matrix 后台任务随运行时停止。默认 Compose 的 HTTP 服务由前置 
 依赖 Rust ≥ 1.99、[just](https://github.com/casey/just)、PostgreSQL 客户端库 `libpq`，以及用于启动 PostgreSQL 的 Docker。
 Pasion 资源构建还需要 `wasm32-unknown-unknown` 目标和 Dioxus 0.7.5 资源；准备工具会在需要时下载匹配的 Dioxus CLI。
 Git 和 curl 用于获取工具或源码。两个前端都通过 Rust 和 Dioxus CLI 构建，不需要 Node.js 或 npm。
-只有执行 `tests/` 下 JavaScript HTTP/集成测试脚本时才需要可选的 Node.js，不需要 Python。
+`tests/` 下 JavaScript 测试需要可选的 Node.js；当前 `scripts/` 下 Agent PostgreSQL、集成与 OpenAPI 检查需要 Python 3。
 `rust-toolchain.toml` 固定 Rust 1.99.0，并配置 rustfmt、Clippy 和 WASM 目标；Docker 构建阶段使用对应的 Rust 1.99 镜像。
 
 `just --list` 显示全部命令。Just 负责组织命令；workspace 中的 Rust `xtask` 实现私有配置生成、资源准备和开发监听，运行这些工具不需要先编译服务器。
@@ -82,8 +82,9 @@ just dev
 后端 Rust 修改编译成功后会优雅重启；编译失败时保留上一次正常运行的服务器。
 前端 Rust/CSS 修改会重新生成 WASM 资源，运行中的宿主直接读取这些资源，刷新浏览器即可生效。仅前端修改不会重启后端，不需要重新构建 Docker 镜像。
 
-浏览器 access/refresh token 只保存在内存中，因此整页刷新后需要重新登录，SPA 页面跳转会保留登录状态。
-宿主重启后，尚在浏览器内存中的 Matrix token 可以重新绑定到新的 Hagency cookie 会话。
+浏览器 access/refresh token 只保存在内存中。整页刷新后 Project/Agent 页面通过
+`/api/session` 验证 HttpOnly 会话并使用封闭 BFF；通用 Matrix 管理需要 bearer 时重新
+进入 Pasion PKCE。会话到期或撤销需重新登录，token 不写入浏览器持久存储。
 
 开发 Palpo 源码时，使用具有 MatrixServer API 的本地仓库：
 
@@ -170,7 +171,9 @@ Pasion 使用原生 `[database]`、`[account]`、`[email]`、`[[clients]]`、`[[
 | `palpo.toml` 的 `db.url` | `palpo` | Matrix 用户、房间、事件和 homeserver 状态 |
 | `pasion.toml` 的 `database.uri` | `pasion` | 账号、OAuth/OIDC token 和会话 |
 
-数据库名必须不同。省略 `pasion_config` 可关闭 Pasion，改用独立的 Hagency、Palpo 两个数据库。
+数据库名必须不同。当前集成 Agent server 必须引用 `pasion_config`，并在 Pasion
+配置的 `[hagency]` 下设置 `delegate_matrix_auth = true`。缺失或关闭委托会被启动与
+`--check-config` 拒绝。
 组件引用、媒体路径及支持的原生密钥文件引用，均相对于声明它们的配置文件解析。
 开发监听会监控所有三个文件，也包括主配置目录之外的引用文件。
 
@@ -265,7 +268,9 @@ cargo check --locked -p hagency-frontend --target wasm32-unknown-unknown
 ```
 
 PG runner 创建/删除随机独立测试库，不应对现有业务库运行测试迁移。真实 Pasion PKCE、
-Matrix 与新 Agent 投递检查使用 `scripts/test-agent-integration.py`，运行参数见脚本。
+Matrix 与新 Agent 投递检查使用 `scripts/test-agent-integration.py`，需用
+`HAGENCY_TEST_SERVER_BINARY` 指定当前 checkout 构建出的二进制；前置条件、环境变量和
+清理步骤见[可执行测试指南](TESTING.zh-CN.md)。
 通用 Pasion/Compose 检查保留 `tests/pasion-integration.mjs` 与 `tests/docker-smoke.mjs`，
 需要其专用测试资源/数据库。旧 Fleet contract scripts 与 fixture server 已移除。
 

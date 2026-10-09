@@ -75,8 +75,8 @@ the PostgreSQL service. Embedded Pasion also needs the wasm32-unknown-unknown
 target and Dioxus 0.7.5 assets; resource preparation downloads the matching
 Dioxus CLI when necessary. Git and curl are used for fetching build tools/source.
 Both frontends build with Rust and the Dioxus CLI, without Node.js or npm.
-Node.js is optional and used only to run the JavaScript HTTP/integration test
-scripts in `tests/`. Python is not required.
+Node.js is optional for JavaScript tests in `tests/`. Python 3 is required for
+the current Agent PostgreSQL/integration and OpenAPI scripts in `scripts/`.
 `rust-toolchain.toml` pins Rust 1.99.0 with rustfmt, Clippy and the WASM target;
 Docker build stages use the matching Rust 1.99 images.
 
@@ -99,9 +99,10 @@ gracefully restart the process. A compilation failure keeps the last working
 server running. Frontend Rust/CSS changes rebuild the WASM assets, which the
 running host serves immediately; refresh the browser to load them. Frontend-only
 changes do not restart the backend. No Docker image rebuild is required.
-Browser access/refresh tokens remain in memory, so a full page reload requires
-signing in again. SPA navigation preserves the session. Host restarts can
-rebind the existing in-memory Matrix token to a new Hagency cookie session.
+Browser access/refresh tokens remain in memory. On reload, Project/Agent pages
+revalidate the HttpOnly session through `/api/session` and use the restricted BFF.
+Generic Matrix administration re-enters Pasion PKCE when a Matrix bearer is needed.
+Expired or revoked sessions require fresh login; tokens are not saved in browser storage.
 
 For Palpo source development, use a local checkout with the MatrixServer API:
 
@@ -153,7 +154,7 @@ is no Hagency native-password or account-approval compatibility mode.
 Frontend source provenance and upstream licensing are recorded in `NOTICE`
 (Padmin commit `83d4567470ada808b89914aa0c786cdc3a7ac89a`).
 
-## Native client login and self-service enrollment
+## Native client login and Agent ownership
 
 `chrislearn/hagency-client` uses the user's own Matrix account through Pasion PKCE.
 Native `/api/hagency/v1` verifies Pasion proof and Matrix whoami, issues short user
@@ -212,8 +213,10 @@ additional `[hagency]` section contains `resources_dir` and
 | `palpo.toml`: `db.url` | `palpo` | Matrix users, rooms, events and homeserver state |
 | `pasion.toml`: `database.uri` | `pasion` | Accounts, OAuth/OIDC tokens and sessions |
 
-Database names must be distinct. Omit `pasion_config` to disable Pasion and use
-only the independent Hagency and Palpo databases. Paths resolve relative to the
+Database names must be distinct. The current integrated Agent server requires
+`pasion_config` and `[hagency] delegate_matrix_auth = true` in Pasion configuration;
+omission or disabled delegation is rejected, including by `--check-config`.
+Paths resolve relative to the
 file that declares them, including component references, media and supported
 native secret-file references. The development watcher monitors all three files,
 including references outside the main configuration directory.
@@ -337,7 +340,8 @@ cargo check --locked -p hagency-frontend --target wasm32-unknown-unknown
 The new PostgreSQL runner creates/removes a random isolated test database. Do not
 point integration checks at an existing business database. Real integrated Pasion
 PKCE/Matrix/new Agent transport checks use `scripts/test-agent-integration.py`;
-consult its argument parser for executable settings. Generic Pasion/Compose checks
+set `HAGENCY_TEST_SERVER_BINARY` to this checkout's built executable. See
+[the runnable testing guide](TESTING.md) for prerequisites, environment variables and cleanup. Generic Pasion/Compose checks
 remain `tests/pasion-integration.mjs` and `tests/docker-smoke.mjs` and require their
 dedicated test resources/databases. Removed Fleet contract scripts and their old
 fixture server are not valid commands for this release.
