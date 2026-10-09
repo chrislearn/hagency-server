@@ -103,17 +103,13 @@ async fn postgres_owner_direct_is_private_independent_and_executes_only_owner_wi
         )
         .await
         .unwrap();
-    assert!(
+    assert_eq!(
         f.domain
-            .verify_provisioning_trusted(
-                &created.binding.id,
-                created.binding.generation,
-                &facts,
-                true,
-                now
-            )
+            .binding(&f.p, &created.binding.id, now)
             .await
-            .is_err()
+            .unwrap()
+            .state,
+        "joining"
     );
     states
         .write()
@@ -321,7 +317,7 @@ async fn postgres_owner_direct_is_private_independent_and_executes_only_owner_wi
         .binding(&f.p, &created.binding.id, now)
         .await
         .unwrap();
-    assert_eq!(fenced.state, "suspended");
+    assert_eq!(fenced.state, "leaving");
     assert!(fenced.generation > created.binding.generation);
     states
         .write()
@@ -333,8 +329,39 @@ async fn postgres_owner_direct_is_private_independent_and_executes_only_owner_wi
         .room(&room, "", &f.p.mxid, Some(&f.facts.puppet_mxid))
         .await
         .unwrap();
+    assert!(
+        f.domain
+            .resume_binding(&f.p, &created.binding.id, &safe, now)
+            .await
+            .is_err()
+    );
+    assert!(
+        f.domain
+            .adopt_owner_direct(&f.p, &f.agent, &room, &safe, now)
+            .await
+            .is_err()
+    );
+    let mut departed = safe.clone();
+    departed.puppet_in_room = false;
     f.domain
-        .resume_binding(&f.p, &created.binding.id, &safe, now)
+        .confirm_left_trusted(&created.binding.id, fenced.generation, &departed, now)
+        .await
+        .unwrap();
+    let rebound = f
+        .domain
+        .adopt_owner_direct(&f.p, &f.agent, &room, &safe, now)
+        .await
+        .unwrap();
+    assert_eq!(rebound.binding.state, "joining");
+    assert_eq!(rebound.binding.generation, fenced.generation + 1);
+    f.domain
+        .verify_provisioning_trusted(
+            &created.binding.id,
+            rebound.binding.generation,
+            &safe,
+            true,
+            now,
+        )
         .await
         .unwrap();
     let delivery = gateway

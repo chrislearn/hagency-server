@@ -537,7 +537,7 @@ impl TransportStore {
                 puppet_mxid: Some(facts.puppet_mxid.clone()), puppet_in_room: facts.puppet_in_room,
                 encrypted: facts.encrypted,
             };
-            crate::domain::DomainStore::fence_membership_loss(db, binding, Some(scope.binding_generation), &room, now).await?;
+            crate::domain::DomainStore::fence_membership_loss(db, binding, Some(scope.binding_generation), &room, false, now).await?;
             // Speaking-right loss is a binding-wide proven denial. Never erase
             // uncertain network evidence or let restored permissions replay it.
             let binding_denied = !facts.puppet_can_send_message;

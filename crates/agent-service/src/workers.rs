@@ -449,23 +449,30 @@ pub(crate) fn start_cleanup(
                         continue;
                     };
                     cursor = binding.to_owned();
-                    if scope.binding_state.as_deref() == Some("active") {
-                        if let Ok(Ok(facts)) = tokio::time::timeout(
+                    if matches!(
+                        scope.binding_state.as_deref(),
+                        Some("active" | "joining" | "suspended")
+                    ) {
+                        let Ok(Ok(facts)) = tokio::time::timeout(
                             std::time::Duration::from_secs(8),
                             g.room(room, space, &scope.owner_mxid, Some(&scope.puppet_mxid)),
                         )
                         .await
+                        else {
+                            continue;
+                        };
+                        // Revocation precedes Matrix departure and survives logout
+                        // and transient failures. Cleanup re-reads its generation.
+                        if domain
+                            .retire_membership_loss_trusted(binding, generation, &facts, now_ms())
+                            .await
+                            .is_err()
                         {
-                            let _ = domain
-                                .suspend_membership_loss_trusted(
-                                    binding,
-                                    generation,
-                                    &facts,
-                                    now_ms(),
-                                )
-                                .await;
+                            continue;
                         }
-                        continue;
+                        if scope.binding_state.as_deref() != Some("joining") {
+                            continue;
+                        }
                     }
                     if scope.binding_state.as_deref() != Some("joining") {
                         // A fresh generation check keeps a stale terminal sweep
@@ -483,6 +490,15 @@ pub(crate) fn start_cleanup(
                         else {
                             continue;
                         };
+                        // Recheck after the Matrix GET; an owner may have rebound
+                        // a terminal scope while that observation was in flight.
+                        if !domain
+                            .departure_desired_trusted(binding, generation)
+                            .await
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
                         if facts.puppet_in_room && m.leave(&scope.puppet_mxid, room).await.is_err()
                         {
                             continue;
@@ -569,6 +585,13 @@ pub(crate) fn start_cleanup(
                 else {
                     continue;
                 };
+                if !domain
+                    .departure_desired_trusted(binding, generation)
+                    .await
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
                 if facts.puppet_in_room {
                     if m.leave(&scope.puppet_mxid, room).await.is_err() {
                         continue;

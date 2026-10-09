@@ -19,6 +19,15 @@ impl DomainStore {
             if let Some(existing)=&a.owner_direct_room_id && existing!=room {return Err(Error::Conflict("owner_direct_room_already_assigned"));}
             if let Some(binding)=sql_query("SELECT id,agent_id,project_id,room_id,state,generation,scope_kind,owner_service_paused FROM hagency_agent_v1.bindings WHERE agent_id=$1 AND room_id=$2").bind::<Text,_>(agent).bind::<Text,_>(room).get_result::<Binding>(db).await.optional()? {
                 if binding.scope_kind!="owner_direct" {return Err(Error::Conflict("room_already_project_bound"));}
+                let binding = match binding.state.as_str() {
+                    "joining" | "active" | "suspended" => binding,
+                    "left" => {
+                        let rebound=sql_query("UPDATE hagency_agent_v1.bindings SET state='joining',owner_service_paused=false,generation=generation+1 WHERE id=$1 RETURNING id,agent_id,project_id,room_id,state,generation,scope_kind,owner_service_paused").bind::<Text,_>(&binding.id).get_result(db).await?;
+                        Self::audit(db,p,"agent.owner_direct.rebind",&binding.id,now).await?;
+                        rebound
+                    }
+                    _ => return Err(Error::Conflict("binding_not_bindable")),
+                };
                 return Ok(AgentBinding{agent:a,binding});
             }
             let a=sql_query("UPDATE hagency_agent_v1.agents SET owner_direct_room_id=$2 WHERE id=$1 RETURNING id,owner_user_id,puppet_mxid,display_name,state,generation,owner_direct_room_id,execution_device_id").bind::<Text,_>(agent).bind::<Text,_>(room).get_result::<Agent>(db).await?;

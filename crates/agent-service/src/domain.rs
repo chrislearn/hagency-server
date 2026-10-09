@@ -938,17 +938,29 @@ impl DomainStore {
             return Err(Error::Invalid("invalid_cleanup_limit"));
         }
         let mut db = self.db.lock().await;
-        Ok(sql_query("SELECT a.id AS agent_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.state AS agent_state,a.generation AS agent_generation,b.id AS binding_id,b.state AS binding_state,b.generation AS binding_generation,b.room_id,coalesce(p.space_id,'') AS space_id FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id WHERE b.id>$1 AND b.state IN ('joining','active','leaving','left','revoked') ORDER BY b.id LIMIT $2")
+        Ok(sql_query("SELECT a.id AS agent_id,a.owner_user_id,u.mxid AS owner_mxid,a.puppet_mxid,a.state AS agent_state,a.generation AS agent_generation,b.id AS binding_id,b.state AS binding_state,b.generation AS binding_generation,b.room_id,coalesce(p.space_id,'') AS space_id FROM hagency_agent_v1.bindings b JOIN hagency_agent_v1.agents a ON a.id=b.agent_id JOIN hagency_agent_v1.users u ON u.id=a.owner_user_id LEFT JOIN hagency_agent_v1.projects p ON p.id=b.project_id WHERE b.id>$1 AND b.state IN ('joining','active','suspended','leaving','left','revoked') ORDER BY b.id LIMIT $2")
             .bind::<Text,_>(after).bind::<BigInt,_>(limit as i64).load(&mut *db).await?)
     }
-    /// Commit a fresh, trusted loss of running membership. This never resumes a
-    /// binding and deliberately ignores creation-only policy changes. Other
-    /// bindings of the same Agent retain their independent running authority.
-    pub async fn suspend_membership_loss_trusted(
+    /// Commit a fresh, trusted loss of membership as a durable departure.
+    /// This never resumes a binding and ignores creation-only policy changes.
+    /// Other bindings of the same Agent retain independent running authority.
+    pub async fn retire_membership_loss_trusted(
         &self,
         id: &str,
         generation: i64,
         facts: &RoomFacts,
+        now: i64,
+    ) -> Result<bool> {
+        self.retire_membership_loss(id, generation, facts, false, now)
+            .await
+    }
+
+    async fn retire_membership_loss(
+        &self,
+        id: &str,
+        generation: i64,
+        facts: &RoomFacts,
+        require_joined: bool,
         now: i64,
     ) -> Result<bool> {
         let mut db = self.db.lock().await;
@@ -956,7 +968,8 @@ impl DomainStore {
             .transaction::<_, Error, _>(async |db: &mut AsyncPgConnection| {
                 db.batch_execute("SELECT pg_advisory_xact_lock(5210750088328904)")
                     .await?;
-                Self::fence_membership_loss(db, id, Some(generation), facts, now).await
+                Self::fence_membership_loss(db, id, Some(generation), facts, require_joined, now)
+                    .await
             })
             .await
     }
@@ -973,7 +986,8 @@ impl DomainStore {
             .transaction::<_, Error, _>(async |db: &mut AsyncPgConnection| {
                 Self::authorize(db, p, now).await?;
                 let binding = Self::binding_db(db, p, id).await?;
-                Self::fence_membership_loss(db, id, Some(binding.generation), facts, now).await?;
+                Self::fence_membership_loss(db, id, Some(binding.generation), facts, false, now)
+                    .await?;
                 Ok(())
             })
             .await
@@ -987,6 +1001,7 @@ impl DomainStore {
         id: &str,
         generation: Option<i64>,
         f: &RoomFacts,
+        require_joined: bool,
         now: i64,
     ) -> Result<bool> {
         #[derive(diesel::QueryableByName)]
@@ -1019,10 +1034,12 @@ impl DomainStore {
         {
             return Err(Error::Conflict("stale_membership_observation"));
         }
-        if s.state != "active"
+        // Missing puppet membership is normal before JOIN, but not after the
+        // trusted provisioner completed it and requests final activation.
+        if !matches!(s.state.as_str(), "joining" | "active" | "suspended")
             || (s.active
                 && f.owner_in_room
-                && f.puppet_in_room
+                && ((s.state == "joining" && !require_joined) || f.puppet_in_room)
                 && (if s.space_id.is_empty() {
                     f.owner_direct_valid
                 } else {
@@ -1031,9 +1048,9 @@ impl DomainStore {
         {
             return Ok(false);
         }
-        sql_query("UPDATE hagency_agent_v1.bindings SET state='suspended',generation=generation+1 WHERE id=$1")
+        sql_query("UPDATE hagency_agent_v1.bindings SET state='leaving',generation=generation+1 WHERE id=$1")
             .bind::<Text,_>(id).execute(db).await?;
-        sql_query("INSERT INTO hagency_agent_v1.domain_audit(actor_user_id,operation,object_id,at_ms) VALUES($1,'worker.binding.membership_suspend',$2,$3)")
+        sql_query("INSERT INTO hagency_agent_v1.domain_audit(actor_user_id,operation,object_id,at_ms) VALUES($1,'worker.binding.membership_leave',$2,$3)")
             .bind::<Text,_>(&s.owner_user_id).bind::<Text,_>(id)
             .bind::<BigInt,_>(now.max(crate::api::now_ms())).execute(db).await?;
         Ok(true)
@@ -1052,6 +1069,10 @@ impl DomainStore {
         activate: bool,
         now: i64,
     ) -> Result<Agent> {
+        // Commit loss independently: a refused final activation must not undo
+        // departure after the remote JOIN has already completed.
+        self.retire_membership_loss(id, generation, f, activate, now)
+            .await?;
         let mut db = self.db.lock().await;
         (*db).transaction::<_,Error,_>(async |db: &mut AsyncPgConnection| {
             db.batch_execute("SELECT pg_advisory_xact_lock(5210750088328904)").await?;

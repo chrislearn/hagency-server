@@ -1602,7 +1602,7 @@ async fn postgres_failed_tool_authorization_still_commits_owner_membership_gener
         .await
         .unwrap();
     let binding = f.domain.binding(&owner, &f.binding, now).await.unwrap();
-    assert_eq!(binding.state, "suspended");
+    assert_eq!(binding.state, "leaving");
     let old = {
         let mut db = f.transport.db.lock().await;
         TransportStore::dispatch(&mut db, &f.p, &id).await.unwrap()
@@ -1622,8 +1622,41 @@ async fn postgres_failed_tool_authorization_still_commits_owner_membership_gener
         puppet_in_room: true,
         encrypted: false,
     };
+    assert!(
+        f.domain
+            .resume_binding(&owner, &f.binding, &restored, now)
+            .await
+            .is_err()
+    );
+    let mut departed = restored.clone();
+    departed.puppet_in_room = false;
     f.domain
-        .resume_binding(&owner, &f.binding, &restored, now)
+        .confirm_left_trusted(&f.binding, binding.generation, &departed, now)
+        .await
+        .unwrap();
+    let rebound = f
+        .domain
+        .bind_room(
+            &owner,
+            &f.agent,
+            crate::domain::BindRoom {
+                project_id: binding.project_id.clone().unwrap(),
+                room_id: binding.room_id.clone(),
+                idempotency_key: "tool-membership-rebind".into(),
+            },
+            &restored,
+            now,
+        )
+        .await
+        .unwrap();
+    f.domain
+        .activate_binding(
+            &owner,
+            &f.binding,
+            rebound.binding.generation,
+            &restored,
+            now,
+        )
         .await
         .unwrap();
     assert!(
@@ -2261,7 +2294,7 @@ async fn postgres_pause_feedback_is_fenced_by_membership_permissions_and_resume(
     lost.owner_in_room = false;
     assert!(
         f.domain
-            .suspend_membership_loss_trusted(&f.binding, binding.generation, &lost, now)
+            .retire_membership_loss_trusted(&f.binding, binding.generation, &lost, now)
             .await
             .unwrap()
     );
@@ -2271,10 +2304,44 @@ async fn postgres_pause_feedback_is_fenced_by_membership_permissions_and_resume(
             .await
             .unwrap()
             .is_empty(),
-        "membership suspension must not advertise a service pause"
+        "membership departure must not advertise a service pause"
     );
+    assert!(
+        f.domain
+            .resume_binding(&f.p, &f.binding, &room_facts(&f.facts), now)
+            .await
+            .is_err()
+    );
+    let current = f.domain.binding(&f.p, &f.binding, now).await.unwrap();
+    let mut departed = room_facts(&f.facts);
+    departed.puppet_in_room = false;
     f.domain
-        .resume_binding(&f.p, &f.binding, &room_facts(&f.facts), now)
+        .confirm_left_trusted(&f.binding, current.generation, &departed, now)
+        .await
+        .unwrap();
+    let rebound = f
+        .domain
+        .bind_room(
+            &f.p,
+            &f.agent,
+            crate::domain::BindRoom {
+                project_id: current.project_id.unwrap(),
+                room_id: current.room_id,
+                idempotency_key: "pause-feedback-rebind".into(),
+            },
+            &room_facts(&f.facts),
+            now,
+        )
+        .await
+        .unwrap();
+    f.domain
+        .activate_binding(
+            &f.p,
+            &f.binding,
+            rebound.binding.generation,
+            &room_facts(&f.facts),
+            now,
+        )
         .await
         .unwrap();
     f.domain

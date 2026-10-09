@@ -928,11 +928,11 @@ async fn postgres_committed_provisioning_survives_logout_and_terminal_sweep_reta
                 &created.binding.id,
                 created.binding.generation,
                 &not_joined,
-                true,
+                false,
                 *NOW
             )
             .await
-            .is_err()
+            .is_ok()
     );
     let mut forged = joined.clone();
     forged.owner_mxid = "@forged:example.test".into();
@@ -1231,6 +1231,47 @@ async fn postgres_scope_pause_blocks_empty_scope_and_preserves_creation_runtime_
     );
 }
 
+async fn rebind_departed(
+    domain: &DomainStore,
+    p: &Principal,
+    binding: &Binding,
+    good: &RoomFacts,
+    key: &str,
+) -> Binding {
+    let current = domain.binding(p, &binding.id, *NOW).await.unwrap();
+    assert_eq!(current.state, "leaving");
+    assert!(
+        domain
+            .departure_desired_trusted(&binding.id, current.generation)
+            .await
+            .unwrap()
+    );
+    let mut departed = good.clone();
+    departed.puppet_in_room = false;
+    domain
+        .confirm_left_trusted(&binding.id, current.generation, &departed, *NOW)
+        .await
+        .unwrap();
+    let joined = domain
+        .bind_room(
+            p,
+            &binding.agent_id,
+            BindRoom {
+                project_id: binding.project_id.clone().unwrap(),
+                room_id: binding.room_id.clone(),
+                idempotency_key: key.into(),
+            },
+            good,
+            *NOW,
+        )
+        .await
+        .unwrap();
+    domain
+        .activate_binding(p, &binding.id, joined.binding.generation, good, *NOW)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 #[ignore = "requires dedicated PostgreSQL database via HAGENCY_AGENT_TEST_DATABASE_URL"]
 async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
@@ -1362,6 +1403,25 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
         puppet_can_send_message: true,
         encrypted: false,
     };
+    let queued_event = RoutedEvent {
+        event_id: format!("$membership_queued_{suffix}"),
+        room_id: good.room_id.clone(),
+        sender_mxid: p.mxid.clone(),
+        body: "queued request".into(),
+        mentioned_mxids: [delivery.puppet_mxid.clone()].into(),
+        thread_root: None,
+        encrypted: false,
+        is_edit: false,
+    };
+    let RouteResult::Queued {
+        dispatch_id: queued_id,
+    } = transport
+        .ingest_routed(&b.id, queued_event, &delivery, *NOW)
+        .await
+        .unwrap()
+    else {
+        panic!("not queued");
+    };
     let event = RoutedEvent {
         event_id: format!("$membership_{suffix}"),
         room_id: good.room_id.clone(),
@@ -1400,7 +1460,7 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
         .unwrap();
     assert!(
         !domain
-            .suspend_membership_loss_trusted(&b.id, b.generation, good, *NOW)
+            .retire_membership_loss_trusted(&b.id, b.generation, good, *NOW)
             .await
             .unwrap()
     );
@@ -1410,15 +1470,15 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
     spoofed.owner_mxid = "@other:example.test".into();
     assert!(
         domain
-            .suspend_membership_loss_trusted(&b.id, b.generation, &spoofed, *NOW)
+            .retire_membership_loss_trusted(&b.id, b.generation, &spoofed, *NOW)
             .await
             .is_err()
     );
     // The denied authenticated domain operation commits the loss separately;
-    // its error must not roll the suspension back.
+    // its error must not roll the departure back.
     assert!(domain.runnable(&p, &b.id, &lost, *NOW).await.is_err());
     let paused = domain.binding(&p, &b.id, *NOW).await.unwrap();
-    assert_eq!(paused.state, "suspended");
+    assert_eq!(paused.state, "leaving");
     assert_eq!(paused.generation, b.generation + 1);
     assert!(domain.runnable(&p, &b.id, good, *NOW).await.is_err());
     assert!(
@@ -1427,19 +1487,20 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
             .await
             .is_ok()
     );
-    // Rejoining does not implicitly resume; old observation cannot affect a
-    // resumed generation, and old execution remains rejected under valid lease.
+    // Rejoining requires a confirmed departure and explicit owner rebind.
+    // Old observations and executions cannot affect the new generation.
     assert!(
         !domain
-            .suspend_membership_loss_trusted(&b.id, paused.generation, good, *NOW)
+            .retire_membership_loss_trusted(&b.id, paused.generation, good, *NOW)
             .await
             .unwrap()
     );
-    let resumed = domain.resume_binding(&p, &b.id, good, *NOW).await.unwrap();
+    assert!(domain.resume_binding(&p, &b.id, good, *NOW).await.is_err());
+    let resumed = rebind_departed(&domain, &p, b, good, "rebind-owner-return").await;
     assert_eq!(resumed.generation, paused.generation + 1);
     assert!(
         domain
-            .suspend_membership_loss_trusted(&b.id, b.generation, &lost, *NOW)
+            .retire_membership_loss_trusted(&b.id, b.generation, &lost, *NOW)
             .await
             .is_err()
     );
@@ -1468,6 +1529,12 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
         .await
         .unwrap();
     assert_eq!(state.state, "unknown");
+    let queued = sql_query("SELECT state FROM hagency_agent_v1.owner_events WHERE id=$1")
+        .bind::<Text, _>(&queued_id)
+        .get_result::<EventState>(&mut *domain.db.lock().await)
+        .await
+        .unwrap();
+    assert_eq!(queued.state, "cancelled");
     let new_event = RoutedEvent {
         event_id: format!("$membership_new_{suffix}"),
         room_id: good.room_id.clone(),
@@ -1490,7 +1557,7 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
     puppet_lost.puppet_in_room = false;
     assert!(
         domain
-            .suspend_membership_loss_trusted(&b.id, resumed.generation, &puppet_lost, *NOW)
+            .retire_membership_loss_trusted(&b.id, resumed.generation, &puppet_lost, *NOW)
             .await
             .unwrap()
     );
@@ -1501,7 +1568,18 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
             .is_err()
     );
     for unlink in [false, true] {
-        let restored = domain.resume_binding(&p, &b.id, good, *NOW).await.unwrap();
+        let restored = rebind_departed(
+            &domain,
+            &p,
+            b,
+            good,
+            if unlink {
+                "rebind-after-space-loss"
+            } else {
+                "rebind-after-kick"
+            },
+        )
+        .await;
         let mut removed = good.clone();
         if unlink {
             removed.room_in_space = false;
@@ -1510,7 +1588,7 @@ async fn postgres_membership_loss_is_durable_and_old_dispatch_cannot_revive() {
         }
         assert!(
             domain
-                .suspend_membership_loss_trusted(&b.id, restored.generation, &removed, *NOW)
+                .retire_membership_loss_trusted(&b.id, restored.generation, &removed, *NOW)
                 .await
                 .unwrap()
         );
@@ -1623,5 +1701,401 @@ async fn postgres_global_identity_create_needs_no_project_or_room_and_binding_is
     assert_eq!(
         domain.agent(&p, &agent.id, *NOW).await.unwrap().state,
         "active"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated PostgreSQL database via HAGENCY_AGENT_TEST_DATABASE_URL"]
+async fn postgres_owner_loss_retires_joining_and_paused_bindings_before_provisioning() {
+    let url = std::env::var("HAGENCY_AGENT_TEST_DATABASE_URL").unwrap();
+    let auth = Store::open(&url, "example.test", "https://example.test/_pasion/")
+        .await
+        .unwrap();
+    let domain = DomainStore::open(&url, "example.test", "_hagency_test_")
+        .await
+        .unwrap();
+    let suffix = secret_token();
+    let (_, p) = user(&auth, &suffix, "depart").await;
+    let (_, other) = user(&auth, &suffix, "stranger").await;
+    let space = format!("!depart_space_{suffix}:example.test");
+    let a = admin(&p, &space, true, None);
+    let project = domain.register_project(&p, &space, &a, *NOW).await.unwrap();
+    for mode in ["joining", "suspended", "final_join", "final_kick"] {
+        let room = format!("!depart_{mode}_{suffix}:example.test");
+        domain
+            .register_room(
+                &p,
+                &project.id,
+                &room,
+                &a,
+                &admin(&p, &room, false, Some(&space)),
+                *NOW,
+            )
+            .await
+            .unwrap();
+        let agent = domain
+            .create_agent(
+                &p,
+                CreateAgent {
+                    display_name: mode.into(),
+                    idempotency_key: format!("create-{mode}"),
+                },
+                *NOW,
+            )
+            .await
+            .unwrap();
+        let mut good = facts(&p, &space, &room, Some(&agent.puppet_mxid));
+        good.puppet_in_room = false;
+        let request = || BindRoom {
+            project_id: project.id.clone(),
+            room_id: room.clone(),
+            idempotency_key: format!("bind-{mode}"),
+        };
+        // A third party's invitation/admin status cannot substitute for ownership.
+        assert!(
+            domain
+                .bind_room(
+                    &other,
+                    &agent.id,
+                    request(),
+                    &facts(&other, &space, &room, None),
+                    *NOW
+                )
+                .await
+                .is_err()
+        );
+        let mut absent = good.clone();
+        absent.owner_in_room = false;
+        assert!(
+            domain
+                .bind_room(&p, &agent.id, request(), &absent, *NOW)
+                .await
+                .is_err()
+        );
+        let created = domain
+            .bind_room(&p, &agent.id, request(), &good, *NOW)
+            .await
+            .unwrap();
+        let mut binding = created.binding;
+        // A not-yet-joined puppet must not cancel a legitimate joining intent.
+        assert!(
+            !domain
+                .retire_membership_loss_trusted(&binding.id, binding.generation, &good, *NOW)
+                .await
+                .unwrap()
+        );
+        good.puppet_in_room = true;
+        if mode == "suspended" {
+            domain
+                .activate_binding(&p, &binding.id, binding.generation, &good, *NOW)
+                .await
+                .unwrap();
+            binding = domain.suspend_binding(&p, &binding.id, *NOW).await.unwrap();
+        }
+        let mut lost = good.clone();
+        if mode == "final_kick" {
+            lost.puppet_in_room = false;
+        } else {
+            lost.owner_in_room = false;
+        }
+        let mut stale = lost.clone();
+        stale.observed_at_ms = *NOW - 60_000;
+        assert!(
+            domain
+                .retire_membership_loss_trusted(&binding.id, binding.generation, &stale, *NOW)
+                .await
+                .is_err()
+        );
+        if matches!(mode, "final_join" | "final_kick") {
+            assert!(
+                domain
+                    .verify_provisioning_trusted(&binding.id, binding.generation, &lost, true, *NOW)
+                    .await
+                    .is_err()
+            );
+        } else {
+            assert!(
+                domain
+                    .retire_membership_loss_trusted(&binding.id, binding.generation, &lost, *NOW)
+                    .await
+                    .unwrap()
+            );
+        }
+        let leaving = domain.binding(&p, &binding.id, *NOW).await.unwrap();
+        assert_eq!(leaving.state, "leaving");
+        assert_eq!(leaving.generation, binding.generation + 1);
+        assert!(
+            domain
+                .verify_provisioning_trusted(&binding.id, leaving.generation, &good, true, *NOW)
+                .await
+                .is_err()
+        );
+        assert!(
+            domain
+                .resume_binding(&p, &binding.id, &good, *NOW)
+                .await
+                .is_err()
+        );
+        assert!(
+            !domain
+                .retire_membership_loss_trusted(&binding.id, leaving.generation, &lost, *NOW)
+                .await
+                .unwrap()
+        );
+        assert!(
+            domain
+                .cleanup_scopes(1000)
+                .await
+                .unwrap()
+                .iter()
+                .any(|s| s.binding_id.as_deref() == Some(&binding.id))
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated PostgreSQL database via HAGENCY_AGENT_TEST_DATABASE_URL"]
+async fn postgres_membership_controller_leaves_paused_and_joining_rooms_and_retries() {
+    let source = std::env::var("HAGENCY_AGENT_TEST_DATABASE_URL").unwrap();
+    let mut control = AsyncPgConnection::establish(&source).await.unwrap();
+    let name = format!("hagency_membership_{}", &hash(&secret_token())[..16]);
+    control
+        .batch_execute(&format!("CREATE DATABASE {name}"))
+        .await
+        .unwrap();
+    let mut url = url::Url::parse(&source).unwrap();
+    url.set_path(&format!("/{name}"));
+    let result =
+        tokio::spawn(async move { exercise_membership_controller(url.as_str()).await }).await;
+    control
+        .batch_execute(&format!("DROP DATABASE {name} WITH (FORCE)"))
+        .await
+        .unwrap();
+    result.unwrap();
+}
+
+async fn exercise_membership_controller(url: &str) {
+    use crate::{gateway::Gateway, matrix_client::MatrixClient};
+    use std::{
+        collections::HashMap,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let auth = Store::open(url, "example.test", "https://example.test/_pasion/")
+        .await
+        .unwrap();
+    let domain = DomainStore::open(url, "example.test", "_hagency_test_")
+        .await
+        .unwrap();
+    let (_, p) = user(&auth, &secret_token(), "controller").await;
+    let space = "!controller_space:example.test";
+    let a = admin(&p, space, true, None);
+    let project = domain.register_project(&p, space, &a, *NOW).await.unwrap();
+    let rooms = Arc::new(Mutex::new(HashMap::<String, (bool, bool, String)>::new()));
+    let attempts = Arc::new(Mutex::new(HashMap::<String, usize>::new()));
+    let joins = Arc::new(AtomicUsize::new(0));
+    let mut bindings = Vec::new();
+    for mode in [
+        "joining",
+        "active",
+        "suspended",
+        "kicked",
+        "valid",
+        "unavailable",
+    ] {
+        let room = format!("!controller_{mode}:example.test");
+        domain
+            .register_room(
+                &p,
+                &project.id,
+                &room,
+                &a,
+                &admin(&p, &room, false, Some(space)),
+                *NOW,
+            )
+            .await
+            .unwrap();
+        let agent = domain
+            .create_agent(
+                &p,
+                CreateAgent {
+                    display_name: mode.into(),
+                    idempotency_key: format!("controller-create-{mode}"),
+                },
+                *NOW,
+            )
+            .await
+            .unwrap();
+        domain
+            .confirm_identity_provisioned(&agent.id, agent.generation)
+            .await
+            .unwrap();
+        let good = facts(&p, space, &room, Some(&agent.puppet_mxid));
+        let creation = domain
+            .bind_room(
+                &p,
+                &agent.id,
+                BindRoom {
+                    project_id: project.id.clone(),
+                    room_id: room.clone(),
+                    idempotency_key: format!("controller-bind-{mode}"),
+                },
+                &good,
+                *NOW,
+            )
+            .await
+            .unwrap();
+        let mut binding = creation.binding;
+        if mode != "joining" {
+            binding = domain
+                .activate_binding(&p, &binding.id, binding.generation, &good, *NOW)
+                .await
+                .unwrap();
+        }
+        if mode == "suspended" {
+            binding = domain.suspend_binding(&p, &binding.id, *NOW).await.unwrap();
+        }
+        rooms.lock().unwrap().insert(
+            room,
+            (
+                matches!(mode, "valid" | "kicked"),
+                mode != "kicked",
+                agent.puppet_mxid,
+            ),
+        );
+        bindings.push((mode, binding));
+    }
+    let state = rooms.clone();
+    let owner = p.mxid.clone();
+    let gateway = Gateway::new(
+        Arc::new(move |room| {
+            let state = state.clone();
+            let owner = owner.clone();
+            Box::pin(async move {
+                if room.contains("unavailable") {
+                    return Err(Error::Unavailable("fixture_state_unavailable"));
+                }
+                let state = state.lock().unwrap();
+                let mut events = vec![
+                    serde_json::json!({"type":"m.room.member","state_key":owner,"content":{"membership":"join"}}),
+                ];
+                if room == space {
+                    for room in state.keys() {
+                        events.push(serde_json::json!({"type":"m.space.child","state_key":room,"content":{"via":["example.test"]}}));
+                    }
+                } else {
+                    let (present, joined, puppet) = state.get(&room).unwrap();
+                    events[0]["content"]["membership"] =
+                        serde_json::json!(if *present { "join" } else { "leave" });
+                    events.push(serde_json::json!({"type":"m.room.member","state_key":puppet,"content":{"membership":if *joined {"join"} else {"leave"}}}));
+                }
+                Ok(events)
+            })
+        }),
+        "@_hagency_service:example.test".into(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = rooms.clone();
+    let calls = attempts.clone();
+    let joins_observed = joins.clone();
+    let http = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut raw = Vec::new();
+            loop {
+                let mut buf = [0; 4096];
+                let read = socket.read(&mut buf).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&buf[..read]);
+                if raw.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8(raw).unwrap();
+            let target = request.split_whitespace().nth(1).unwrap();
+            let url = url::Url::parse(&format!("http://localhost{target}")).unwrap();
+            let segments: Vec<_> = url
+                .path_segments()
+                .unwrap()
+                .map(|s| {
+                    percent_encoding::percent_decode_str(s)
+                        .decode_utf8()
+                        .unwrap()
+                        .into_owned()
+                })
+                .collect();
+            let mut status = "200 OK";
+            if segments.last().map(String::as_str) == Some("leave") {
+                let room = &segments[4];
+                let mut calls = calls.lock().unwrap();
+                let count = calls.entry(room.clone()).or_default();
+                *count += 1;
+                // A failed departure must remain owed across subsequent rounds.
+                if *count == 1 {
+                    status = "503 Service Unavailable";
+                } else {
+                    state.lock().unwrap().get_mut(room).unwrap().1 = false;
+                }
+            } else {
+                joins_observed.fetch_add(1, Ordering::SeqCst);
+            }
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+    });
+    let matrix = MatrixClient::new(
+        format!("http://{address}").parse().unwrap(),
+        "fixture-AS-token-no-real-secret".into(),
+        "example.test".into(),
+    )
+    .unwrap();
+    let worker = crate::workers::start_cleanup(domain.clone(), gateway, matrix);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let mut complete = true;
+            for (mode, binding) in &bindings {
+                let b = domain
+                    .binding(&p, &binding.id, crate::api::now_ms())
+                    .await
+                    .unwrap();
+                if matches!(*mode, "valid" | "unavailable") {
+                    assert_eq!(b.state, "active");
+                    assert_eq!(b.generation, binding.generation);
+                } else {
+                    complete &= b.state == "left";
+                    if b.state == "left" {
+                        assert_eq!(b.generation, binding.generation + 1);
+                    }
+                }
+            }
+            if complete {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    worker.abort();
+    let _ = worker.await;
+    http.abort();
+    let _ = http.await;
+    result.expect("membership controller did not converge");
+    assert_eq!(
+        AtomicUsize::load(&joins, Ordering::SeqCst),
+        0,
+        "revoked intents cannot issue joins"
+    );
+    let calls = attempts.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert!(
+        calls.values().all(|n| *n >= 2),
+        "failed departure must retry"
     );
 }
