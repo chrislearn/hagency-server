@@ -59,3 +59,10 @@ dispatch. Cargo Dependabot updates run weekly. Local offline reproduction may us
 Informational warnings currently cover async-std, paste, smartstring,
 unsafe-libyaml and legacy rand. These remain replacement/review work; they are
 not included in the two vulnerability-record count.
+
+On 2026-11-04, upstream main advanced to `37d6e30`. Pasion's JOSE,
+keystore, registration handler and browser source trees remain identical to
+`83e52e5`. The Server graph updates the process/Tokio OpenTelemetry
+instrumentation to 0.3.0 and drops its unused OpenTelemetry 0.32 generation.
+The reviewed source pin follows the new revision; existing risk dispositions
+and their expiration remain unchanged.

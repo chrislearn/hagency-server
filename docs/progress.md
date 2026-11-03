@@ -260,3 +260,19 @@ Pinned the embedded Pasion backend and browser build to upstream main
 `83e52e5` after #122 merged. The fresh native Server build and branded assets
 passed a new-account registration, original consent, PKCE exchange and Matrix
 whoami check against a fresh PostgreSQL fixture; no separate login was sent.
+
+## 2026-11-04 — Update Pasion main to 37d6e30
+
+Updated all Pasion git packages in Cargo.lock from 83e52e5 to upstream main
+37d6e30. Process/Tokio instrumentation moves to 0.3.0, removing the duplicate
+OpenTelemetry 0.32 generation. Verified the JOSE, keystore, backend and frontend
+source trees are unchanged; the reviewed-source pin follows the new commit
+without relaxing the finding policy or its expiration.
+
+The locked native Server build and both browser resource builds pass. Against
+an isolated fresh PostgreSQL fixture, new-account registration continues the
+original consent and PKCE callback, passes Matrix whoami and preserves member
+permissions without a separate login. Logo, blue theme CSS and theme script
+return HTTP 200. Dependency-policy tests pass 9/9; its fresh audit still records
+two unresolved vulnerability findings and five warnings. No production
+deployment or additional Codex inference was performed.

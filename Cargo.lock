@@ -6182,7 +6182,7 @@ dependencies = [
 [[package]]
 name = "oauth2-types"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "base64ct",
  "chrono",
@@ -6549,16 +6549,6 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "opentelemetry"
-version = "0.32.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
-dependencies = [
- "js-sys",
- "tracing",
-]
-
-[[package]]
-name = "opentelemetry"
 version = "0.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c1f1a6ac9c875a4941e4c7c085b61e8f4daa326de03b4701768c3491a6ad9ee"
@@ -6580,28 +6570,28 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "reqwest 0.13.5",
 ]
 
 [[package]]
 name = "opentelemetry-instrumentation-process"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "065d9891eac9d4089f2c61872a43236029496c3642f62706ddbe71e96f6e00be"
+checksum = "050a1c8ed107f0e1e384599ace870d68d5bfa3f64839dd59b2e278c615e60ca4"
 dependencies = [
- "opentelemetry 0.32.0",
- "opentelemetry-semantic-conventions 0.32.1",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
  "procfs",
 ]
 
 [[package]]
 name = "opentelemetry-instrumentation-tokio"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aac2efa77dc2389d53fc00e53074a8117f53b1bd5ab92b0cd8bf7625156dc49f"
+checksum = "32707b35a8ea8950e732ac39ca4a9c73690c9d940c8ea51a27ed2a04cf5d3332"
 dependencies = [
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "tokio",
 ]
 
@@ -6613,7 +6603,7 @@ checksum = "699a67345e21962a231955b9059a157e428b219fa5df8efe11f08346fb23a344"
 dependencies = [
  "http",
  "httpdate",
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
@@ -6627,7 +6617,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "884d95dfaf00ec1e068b5786ced2ab28f2d264cb3ff2cfd98a7408eed0207e85"
 dependencies = [
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "opentelemetry_sdk",
  "smartstring",
 ]
@@ -6638,7 +6628,7 @@ version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25da1ac11a0aeccf38d7f77ee0348715adaf8340f65ad46c94a02c6b20e2f65d"
 dependencies = [
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "opentelemetry_sdk",
  "prost",
 ]
@@ -6649,16 +6639,10 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60ac54422fb2a7ed2e0325b5650bedff0b6e777e33dbbac7b49572d92d689a56"
 dependencies = [
- "opentelemetry 0.33.1",
- "opentelemetry-semantic-conventions 0.33.0",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
 ]
-
-[[package]]
-name = "opentelemetry-semantic-conventions"
-version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c913ac17a6c451661ee255f4625d143e51647ae78ebd969b75e41c4442f4fe47"
 
 [[package]]
 name = "opentelemetry-semantic-conventions"
@@ -6673,7 +6657,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f71803f481d3f5ccbe477edb42a78f473613712b2327835911a9ea0ab069824"
 dependencies = [
  "chrono",
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "opentelemetry_sdk",
 ]
 
@@ -6686,7 +6670,7 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "percent-encoding",
  "portable-atomic",
  "rand 0.9.5",
@@ -7080,7 +7064,7 @@ dependencies = [
 [[package]]
 name = "pasion-backend"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "anyhow",
  "argon2",
@@ -7120,14 +7104,14 @@ dependencies = [
  "minijinja-contrib",
  "oauth2-types",
  "opendal",
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-instrumentation-process",
  "opentelemetry-instrumentation-tokio",
  "opentelemetry-otlp",
  "opentelemetry-prometheus-text-exporter",
  "opentelemetry-resource-detectors",
- "opentelemetry-semantic-conventions 0.33.0",
+ "opentelemetry-semantic-conventions",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "p256",
@@ -7188,7 +7172,7 @@ dependencies = [
 [[package]]
 name = "pasion-config"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "anyhow",
  "camino",
@@ -7220,7 +7204,7 @@ dependencies = [
 [[package]]
 name = "pasion-data"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7235,8 +7219,8 @@ dependencies = [
  "language-tags",
  "lettre",
  "oauth2-types",
- "opentelemetry 0.33.1",
- "opentelemetry-semantic-conventions 0.33.0",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
  "pasion-iana",
  "pasion-jose",
  "rand 0.10.3",
@@ -7261,7 +7245,7 @@ dependencies = [
 [[package]]
 name = "pasion-i18n"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "camino",
  "fluent-bundle",
@@ -7281,7 +7265,7 @@ dependencies = [
 [[package]]
 name = "pasion-iana"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -7290,7 +7274,7 @@ dependencies = [
 [[package]]
 name = "pasion-jose"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "base64ct",
  "chrono",
@@ -7320,7 +7304,7 @@ dependencies = [
 [[package]]
 name = "pasion-keystore"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "aead",
  "base64ct",
@@ -7350,7 +7334,7 @@ dependencies = [
 [[package]]
 name = "pasion-matrix"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7361,7 +7345,7 @@ dependencies = [
 [[package]]
 name = "pasion-matrix-palpo"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7378,7 +7362,7 @@ dependencies = [
 [[package]]
 name = "pasion-messaging"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -7401,7 +7385,7 @@ dependencies = [
 [[package]]
 name = "pasion-policy"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7420,7 +7404,7 @@ dependencies = [
 [[package]]
 name = "pasion-tasks"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7429,8 +7413,8 @@ dependencies = [
  "diesel",
  "diesel-async",
  "oauth2-types",
- "opentelemetry 0.33.1",
- "opentelemetry-semantic-conventions 0.33.0",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
  "pasion-data",
  "pasion-i18n",
  "pasion-matrix",
@@ -7453,7 +7437,7 @@ dependencies = [
 [[package]]
 name = "pasion-templates"
 version = "1.8.0"
-source = "git+https://github.com/meldry-com/pasion.git?branch=main#83e52e53a9305165f55fa22602dbf01787c45656"
+source = "git+https://github.com/meldry-com/pasion.git?branch=main#37d6e30ceecb9c0aee3da3c6990298c13760f4bc"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -9286,9 +9270,9 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb12e24d0c871da3fab83a8d1b0bb5e3ac1175067d1f741c9ec2972df7781a0a"
 dependencies = [
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "opentelemetry-http",
- "opentelemetry-semantic-conventions 0.33.0",
+ "opentelemetry-semantic-conventions",
  "percent-encoding",
  "salvo_core",
  "tracing",
@@ -11042,7 +11026,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0a904802a1b902f43638b677ff2a650847e3b4404101b6c586d648e8c1e3e8fe"
 dependencies = [
  "js-sys",
- "opentelemetry 0.33.1",
+ "opentelemetry",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
